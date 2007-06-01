@@ -14,6 +14,7 @@ sub get_next_contact($);
 sub not_empty(@);
 
 $|=1;
+$/="";
 
 # Default pab attributes that will be collected, in order.
 #    The values will be returned in this order
@@ -31,9 +32,6 @@ my @pab_attrs_to_collect = split(' ', $user_attr_list);
 
 open (OUT, ">$csv_out") || die "can't open $csv_out for writing";
 
-
-$/="";
-
 # populate hash mapping paburi to uid
 print "*** building paburi to uid mapping table...\n";
 my $pab2uid_h = get_pab_uris($user_ldif);
@@ -43,10 +41,10 @@ print "*** creating csv..\n";
 open(PAB, $pab_ldif) || die "can't open $pab_ldif";
 while (my $a = get_next_contact($pab2uid_h)) {
     my ($uid, @contact) = @$a;
-    # create desired output format here.
+    # desired output format here.
     $opts->{d} && print "$uid, contact: " . join(', ', @contact) . "\n";
     $opts->{d} && print "\n\n\n";
-    print OUT "$uid, contact: " . join(', ', @contact) . "\n";
+    print OUT "$uid," . join(',', @contact) . "\n";
 } 
 close(PAB);
 close(OUT);
@@ -63,9 +61,11 @@ close(OUT);
 sub get_next_contact($) {
     my $p2u = shift;
 
+    # take one entry at a time from the PAB, return when a valid entry
+    # is found.
     while (my $e = <PAB>) {
         my @e = parse_pab_entry($e, $p2u); 
-        return \@e if (($#e > -1) && (not_empty(@e)));
+        return \@e if (not_empty(@e));
     }
     $opts->{d} && print "returning undef..\n";
     return undef;
@@ -82,6 +82,8 @@ sub get_next_contact($) {
 #
 sub not_empty(@) {
     my @a = @_;
+
+    return undef unless ($#a > -1);
 
     # skip the first entry, it will always have the uid in it.
 
@@ -102,7 +104,11 @@ sub not_empty(@) {
 sub parse_pab_entry($$) {
     my ($e, $p2u) = @_;
 
-    $opts->{d} && print "\n\nentry: /$e/\n";
+    # un-wrap the ldif
+    $e =~ s/\n\s+//g;
+    $e .= "\n";  # add a cr to keep the lines consistent
+
+    #$opts->{d} && print "\n\nentry: /$e/\n";
 
     my $dn;
     my @r;
@@ -112,21 +118,18 @@ sub parse_pab_entry($$) {
         return @r;    
     }
     
-    print "dn: $dn\n";
     $e =~ /dn:\s*[^\,]+,\s*([^\n]+)\n/i;
     my $pt = $1;
+    #$pt = (split /\,/, $dn)[0];
+    #$pt =~ s/dn:\s*//i;
 
-    # if (!defined $pt || (defined $pt && !exists $p2u->{lc $pt})) {
-    if (!defined $pt || defined $pt) {
-        $opts->{d} && print "orphaned pab tree or container: $dn\n";
+    if (!defined $pt || (defined $pt && !exists $p2u->{lc $pt})) {
+        #$opts->{d} && print "orphaned pab tree or container: $dn\n";
     } else { 
-        $opts->{d} && print "paburi: /$pt/\n";
         my $u =  $p2u->{lc $pt};
-        $opts->{d} && print "corresponding uid: $u\n"; 
         push @r, $u;
 
-        # pull the rest of the entries:
-
+        # pull the attributes out of the entry:
         for my $a (@pab_attrs_to_collect) {
             if ($e =~ /$a:\s*([^\n]+)\n/) {
                 my $v = $1;
@@ -158,13 +161,18 @@ sub get_pab_uris($) {
 
         # Ignore the entry if it does not have uid & paburi attributes.
         if (defined $uid && defined $paburi) {
-            # $opts->{d} && print "$uid: $paburi\n";
+            #$opts->{d} && print "$uid: $paburi\n";
+	    # strip off 'ldap://host.domain.com:'
+            # ldap://pabldap.ou.edu:389/ou=uniqueIdentifier=12436,ou=people,o=ou.edu,dc=ou,dc=edu,o=pab
+            # becomes ou=uniqueIdentifier=12436,ou=people,o=ou.edu,dc=ou,dc=edu,o=pab
+	    # we don't want them, we read from a text dump of the pab
             $paburi =~ s/ldap\:\/\/[^\/]+\///i;
             if (exists $p2u_h->{lc $paburi} && 
                 lc $uid eq lc $p2u_h->{lc $paburi}){
                 warn("$paburi already in hash.  Was $p2u_h->{lc $paburi}, ".
                     "now $uid");
             } else {
+		#print "adding $uid: /$paburi/\n";
                 $p2u_h->{lc $paburi} = $uid;
             }
         }
@@ -186,14 +194,14 @@ sub print_usage() {
     print "\t[-d] print debugging\n";
     print "\t[-a attribute list] space separated list of ldif attributes\n".
           "\t\tfrom the pab.  Values will be returned in the order the attrs\n".
-          "\t\tare entered.  Default is: $d_pab_attrs_to_collect\n\n"; 
+          "\t\tare entered.  Default: $d_pab_attrs_to_collect\n\n"; 
     print "\texport ldif with db2ldif:\n";
-    print "\t\t./db2ldif -U1Nu -s dc=domain,dc=com\n".
-          "\t\t\t-a /tmp/dc_domain_dc_com.ldif\n";
-    print "\t\t./db2ldif -U1Nu -s o=pab -a /tmp/o_pab.ldif\n";
+    print "\t./db2ldif -U1Nu -s dc=domain,dc=com\n".
+          "\t\t-a /tmp/dc_domain_dc_com.ldif\n";
+    print "\t./db2ldif -U1Nu -s o=pab -a /tmp/o_pab.ldif\n";
     print "\n";
     print "\tthen $0 -u /tmp/dc_domain_dc_com.ldif -p /tmp/o_pab.ldif\n".
-          "-o contacts.csv\n";
+          "\t\t-o contacts.csv\n";
     print "\n";
     exit 0;
 }
