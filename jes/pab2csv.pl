@@ -5,6 +5,8 @@
 #
 # Convert a Java Messaging Server 6.2 PAB to CSV
 #
+#  ~/Docs/utils/trunk/jes/pab2csv.pl -u ~/Docs/ou/pab2csv/dc_ou_dc_edu_070522.ldif -p ~/Docs/ou/pab2csv/pab_no_mime.ldif -o contacts -a '"" givenname "" sn "" "" "" "" street "" "" l st postalcode co "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" facsimileTelephoneNumber telephoneNumber "" "" "" "" "" homephone "" "" mobile "" "" pager "" "" "" "" "" "" "" dateofbirth "" "" "" "" mail "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" labeleduri'|more
+#
 use strict;
 use Getopt::Std;
 
@@ -26,27 +28,52 @@ getopts('u:p:da:o:', \%$opts);
 my $user_ldif = $opts->{u} || print_usage();
 my $pab_ldif = $opts->{p} || print_usage();
 my $user_attr_list = $opts->{a} || $d_pab_attrs_to_collect;
-my $csv_out = $opts->{o} || print_usage();
+my $csv_out_dir = $opts->{o} || print_usage();
+
+print "attr_list: /$user_attr_list/\n";
 
 my @pab_attrs_to_collect = split(' ', $user_attr_list);
 
-open (OUT, ">$csv_out") || die "can't open $csv_out for writing";
+#open (OUT, ">$csv_out") || die "can't open $csv_out for writing";
 
 # populate hash mapping paburi to uid
 print "*** building paburi to uid mapping table...\n";
 my $pab2uid_h = get_pab_uris($user_ldif);
 
 # loop through pab entries, generate csv
-print "*** creating csv..\n";
+print "*** compiling csvs..\n";
 open(PAB, $pab_ldif) || die "can't open $pab_ldif";
+my $contacts;
 while (my $a = get_next_contact($pab2uid_h)) {
     my ($uid, @contact) = @$a;
     # desired output format here.
     $opts->{d} && print "$uid, contact: " . join(', ', @contact) . "\n";
     $opts->{d} && print "\n\n\n";
-    print OUT "$uid," . join(',', @contact) . "\n";
+    #print "$uid," . join(',', @contact) . "\n";
+    # this won't scale.
+    push @{$contacts->{$uid}}, join(',', @contact);
 } 
 close(PAB);
+
+print "\nwriting csv files..\n";
+
+for my $u (sort keys %$contacts) {
+    print "writing csv for $u..\n";
+
+    my $outfile = "$csv_out_dir/$u.csv";
+    print "outfile: $outfile\n";
+    if (!open (OUT, ">$outfile")) { 
+	print "can't open $outfile";
+	next;
+    }
+	
+    
+    for (@{$contacts->{$u}}) {
+ 	print OUT $_ . "\n";
+    }
+    
+}
+
 close(OUT);
 
 
@@ -104,7 +131,7 @@ sub not_empty(@) {
 sub parse_pab_entry($$) {
     my ($e, $p2u) = @_;
 
-    # un-wrap the ldif
+    # un-wrap lines in the ldif
     $e =~ s/\n\s+//g;
     $e .= "\n";  # add a cr to keep the lines consistent
 
@@ -131,7 +158,7 @@ sub parse_pab_entry($$) {
 
         # pull the attributes out of the entry:
         for my $a (@pab_attrs_to_collect) {
-            if ($e =~ /$a:\s*([^\n]+)\n/) {
+            if ($a !~ /^\s*$/ && $e =~ /$a:\s*([^\n]+)\n/) {
                 my $v = $1;
                 push @r, $v;
             } else {
@@ -188,7 +215,7 @@ sub get_pab_uris($) {
 sub print_usage() {
     print "\n";
     print "usage: $0 [-d] [-a attribute list] -u <user ldif file>\n".
-          "\t-p <pab ldif file> -o <csv output file>\n";
+          "\t-p <pab ldif file> -o <output directory>\n";
     print "\n";
 
     print "\t[-d] print debugging\n";
@@ -201,7 +228,7 @@ sub print_usage() {
     print "\t./db2ldif -U1Nu -s o=pab -a /tmp/o_pab.ldif\n";
     print "\n";
     print "\tthen $0 -u /tmp/dc_domain_dc_com.ldif -p /tmp/o_pab.ldif\n".
-          "\t\t-o contacts.csv\n";
+          "\t\t-o contacts\n";
     print "\n";
     exit 0;
 }
