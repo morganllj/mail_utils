@@ -8,7 +8,7 @@
 # cd working/dir/path
 #  ~/Docs/utils/trunk/jes/pab2csv.pl -u dc_ou_dc_edu_070522.ldif -p pab_no_mime.ldif -o contacts -a '"" givenname "" sn "" "" "" "" street "" "" l st postalcode co "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" facsimileTelephoneNumber telephoneNumber "" "" "" "" "" homephone "" "" mobile "" "" pager "" "" "" "" "" "" "" dateofbirth "" "" "" "" mail "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" labeleduri'|more
 #
-# ~/Docs/utils/trunk/jes/pab2csv.pl -u dc_ou_dc_edu_070522.ldif  -p pab_smaller.ldif -o contacts -a 'givenname,sn,cn,mail,telephonenumber,homephone,mobile,pager,facsimiletelephonenumber,address,l,st,postalcode,co,labeleduri,dateofbirth,description' -n 'First Name,Last Name,E-Mail Display Name,E-Mail Address,Business Phone,Home Phone,Mobile Phone,Pager,Business Fax,Home Street,Home City,Home State,Home Postal Code,Home/Country Region,Web Page,Birthday,Notes'
+# ~/Docs/utils/trunk/jes/pab2csv.pl -u dc_ou_dc_edu_070522.ldif  -p o_pab.ldif -o contacts -a 'givenname,sn,cn,mail,telephonenumber,homephone,mobile,pager,facsimiletelephonenumber,address,l,st,postalcode,co,labeleduri,dateofbirth,description' -n 'First Name,Last Name,E-Mail Display Name,E-Mail Address,Business Phone,Home Phone,Mobile Phone,Pager,Business Fax,Home Street,Home City,Home State,Home Postal Code,Home/Country Region,Web Page,Birthday,Notes'
 use strict;
 use Getopt::Std;
 
@@ -176,22 +176,26 @@ sub parse_pab_entry($$) {
 	
         push @r, $u;
 
-
 	my $mail_val;
-	my $mail_index=0;
+	my $mail_index=1;  # start at 1, index 0 is the uid
         # pull the attributes out of the entry:
         for my $a (@pab_attrs_to_collect) {
             if ($a !~ /^\s*$/ && $e =~ /\n$a:\s*([^\n]+)\n/i) {
                 my $v = $1;
 
 		if ($a eq "mail") {
+
 		    $mail_val = $v;
-		} else {
-		    $mail_index++ unless defined $mail_val;
+#  		    if ($u =~ /stev4508/) {
+# 			print "setting $mail_index $mail_val\n";
+# 		    }
+
 		}
+		$mail_index++ unless defined $mail_val;
+
 
 		if ($v =~ /\,/) {
-		    push @r, "\'$v\'";
+		    push @r, "\"$v\"";
 
 		} else {
 		    push @r, $v;
@@ -199,14 +203,22 @@ sub parse_pab_entry($$) {
             } else {
                 push @r, '';
             }
-        } 
-	if (defined $mail_val) {
-	    for (my $i=0; $i < $#r+1; $i++) {
-		if ($i != $mail_index && $r[$i] eq $mail_val) {
-		    $r[$i] = "";
-		}
-	    }
-	}
+        }
+
+	# if we've defined a mail val we go through the entry and remove any dups.
+ 	if (defined $mail_val) {
+# 	    if ($u =~ /stev4508/) {
+# 		print "mail_val: $mail_val, uid: $u\n";
+# 	    }
+ 	    for (my $i=0; $i<=$#r; $i++) {
+ 		if (($i != $mail_index) && ($r[$i] eq $mail_val)) {
+# 		    if ($u =~ /stev4508/) {
+# 			print "setting $r[$i] to \'\', i: $i\n";
+# 		    }
+ 		    $r[$i] = "";
+ 		}
+ 	    }
+ 	}
     }
     return @r;
 }
@@ -218,7 +230,7 @@ sub get_pab_uris($) {
     my $file = shift;
 
     my $p2u_h;
-    open (USR, "$file") || die "can't open $file";
+    open (USR, "$file") || die "can't open $file\n";
     while (<USR>) {
         my ($dn)     = /dn:\s*([^\n]+)/i;
         my ($uid)    = /uid:\s*([^\n]+)/i;
