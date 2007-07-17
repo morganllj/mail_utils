@@ -27,7 +27,7 @@ getopts('nm:u:w:h:', \%$opts);
 # my $server = $ARGV[2];
 my $mbox = $opts->{m} || print_usage();
 my $user = $opts->{u} || print_usage();
-my $pass = $opts->{w} || print_usage();
+my $pass = $opts->{w} || print_usage()
 my $host = $opts->{h} || print_usage();
 
 # $server = 'smtp' if(!defined($server));
