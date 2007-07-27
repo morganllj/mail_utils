@@ -176,22 +176,14 @@ sub parse_pab_entry($$) {
 	
         push @r, $u;
 
-	my $mail_val;
-	my $mail_index=1;  # start at 1, index 0 is the uid
         # pull the attributes out of the entry:
         for my $a (@pab_attrs_to_collect) {
-            if ($a !~ /^\s*$/ && $e =~ /\n$a:\s*([^\n]+)\n/i) {
+            if ($a !~ /^\s*$/ && $e =~ /\n$a:\s*([^\n:]+)\n/i) {  
+                       #':' added to keep blank entries from collecting the next line.  ie:
+                       # homePhone:
+                       # modifiersName: cn=Directory Manager
+		       #  would return 'modifiersName: cn=Directory Manager for phone.
                 my $v = $1;
-
-		if ($a eq "mail") {
-
-		    $mail_val = $v;
-#  		    if ($u =~ /stev4508/) {
-# 			print "setting $mail_index $mail_val\n";
-# 		    }
-
-		}
-		$mail_index++ unless defined $mail_val;
 
 
 		if ($v =~ /\,/) {
@@ -205,20 +197,6 @@ sub parse_pab_entry($$) {
             }
         }
 
-	# if we've defined a mail val we go through the entry and remove any dups.
- 	if (defined $mail_val) {
-# 	    if ($u =~ /stev4508/) {
-# 		print "mail_val: $mail_val, uid: $u\n";
-# 	    }
- 	    for (my $i=0; $i<=$#r; $i++) {
- 		if (($i != $mail_index) && ($r[$i] eq $mail_val)) {
-# 		    if ($u =~ /stev4508/) {
-# 			print "setting $r[$i] to \'\', i: $i\n";
-# 		    }
- 		    $r[$i] = "";
- 		}
- 	    }
- 	}
     }
     return @r;
 }
