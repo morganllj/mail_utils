@@ -50,9 +50,6 @@ open(PAB, $pab_ldif) || die "can't open $pab_ldif";
 my $contacts;
 while (my $a = get_next_contact($pab2uid_h)) {
     my ($uid, @contact) = @$a;
-    if ($uid eq "jone7099") {
-	$opts->{d} && print "$uid, contact: " . join(', ', @contact) . "\n";
-    }
     #print "$uid," . join(',', @contact) . "\n";
     # this won't scale.
     
@@ -147,8 +144,10 @@ sub parse_pab_entry($$) {
 
     my $dn;
     my @r;
-    # ignore entries that don't contain a dn and 'un=AddressBook' entries
-    if ($e =~ /dn:\s*([^\n]+)\n/i && $e !~ /dn:\s*un=addressbook/i) { 
+    # ignore entries that don't contain a dn or mail attribute and
+    # entries that include 'un=AddressBook' in the dn.
+     if ($e =~ /dn:\s*([^\n]+)\n/i && $e !~ /dn:\s*un=addressbook/i && 
+	 $e =~ /\nmail:[^\@]*\@[^\n]*\n/) {
         $dn = $1; 
     }	else {
         return @r;    
@@ -179,10 +178,12 @@ sub parse_pab_entry($$) {
         # pull the attributes out of the entry:
         for my $a (@pab_attrs_to_collect) {
             if ($a !~ /^\s*$/ && $e =~ /\n$a:\s*([^\n:]+)\n/i) {  
-                       #':' added to keep blank entries from collecting the next line.  ie:
+                       #':' added to keep blank entries from collecting the 
+		       #     next line.  ie:
                        # homePhone:
                        # modifiersName: cn=Directory Manager
-		       #  would return 'modifiersName: cn=Directory Manager for phone.
+		       #  would return 'modifiersName: cn=Directory Manager for 
+	               #     phone.
                 my $v = $1;
 
 
