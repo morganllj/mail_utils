@@ -6,8 +6,6 @@
 # Search an enterprise ldap and add/sync/delete users to a Zimbra
 # infrastructure
 #
-# run as 'zimbra' user on one of the stores.
-#
 # One way sync: define attributes mastered by LDAP, sync them to
 # Zimbra.  attributes mastered by Zimbra do not go to LDAP.
 
@@ -16,7 +14,10 @@ use Getopt::Std;
 use Net::LDAP;
 use Data::Dumper;
 
-use lib "/home/morgan/Desktop/zcs-5.0.0_RC1_1538-src/ZimbraServer/src/perl/soap";
+# The Zimbra SOAP libraries.  Download and uncompress the Zimbra
+# source code to get them.
+use lib "/home/morgan/zcs-5.0.0_RC1_1538-src/ZimbraServer/src/perl/soap";
+
 #use LWP::UserAgent;
 use XmlElement;
 use XmlDoc;
@@ -26,8 +27,8 @@ sub print_usage();
 sub get_z2l_map();
 sub add_user($);
 sub sync_user($$);
-sub build_zu_h($);
 sub get_z_user($);
+sub fix_case($);
 
 my $opts;
 getopts('h:D:w:b:ed:', \%$opts);
@@ -41,6 +42,9 @@ my $SOAP = $Soap::Soap12;
 
 # these accounts will never be removed or modified
 my @zimbra_special = qw/admin wiki spam* ham*/;
+# run SDP case fixing algorithm (fix_case()) on these attrs.
+#   Basically upcase after spaces and certain chars
+my @z_attrs_2_fix_case = qw/cn displayname sn givenname/;
 
 
 my $ldap_host = $opts->{h}     || print_usage();
@@ -50,7 +54,7 @@ my $bindpass =  $opts->{w}     || "pass";
 my $zimbra_domain = $opts->{d} || "dmail02.domain.org";
 my $zimbra_default_pass = $opts->{p} || "pass";
 #my $fil = "(objectclass=posixAccount)";
-my $fil = "(orghomeorgcode=9500)";
+my $fil = "(|(orghomeorgcd=9500)(orghomeorgcd=8020))";
 
 
 print "starting at ", `date`;
@@ -66,7 +70,7 @@ $rslt->code && die "unable to bind as $binddn: $rslt->error";
 my $d = new XmlDoc;
 $d->start('AuthRequest', $ACCTNS);
 $d->add('name', undef, undef, "admin");
-$d->add('password', undef, undef, "pass");
+$d->add('password', undef, undef, $zimbra_default_pass);
 $d->end();
 # get an authResponse, authToken, sessionId & context back.
 my $authResponse = $SOAP->invoke($url, $d->root());
@@ -83,31 +87,13 @@ for my $lusr ($rslt->entries) {
     my $usr = $lusr->get_value("uid");
 
     ### check for a corresponding zimbra account
-#    my $zmprov_ga_out = `zmprov ga $usr 2>&1`;
-
     my $zu_h = get_z_user($usr);
 
     if (!defined $zu_h) {
  	add_user($lusr);
     } else {
-	#my $zu_h = build_zu_h($zmprov_ga_out);
- 	print "syncing ",$lusr->get_value("cn"),"\n";
  	sync_user($zu_h, $lusr)
     }
-
-#     if ($zmprov_ga_out =~ /ERROR: account.NO_SUCH_ACCOUNT/) {
-# 	### if not, add	
-# 	print "\nadding: ",$lusr->get_value("cn")," ($usr)\n";
-# 	add_user($lusr);
-#     } elsif ($zmprov_ga_out =~ /^ERROR/) {
-# 	print "Unexpected error on $usr, skipping: $zmprov_ga_out\n";
-#     }else {
-# 	### if so, sync
-	
-# 	my $zu_h = build_zu_h($zmprov_ga_out);
-# 	print "syncing ",$lusr->get_value("cn"),"\n";
-# 	sync_user($zu_h, $lusr)
-#     }
 }
 
 
@@ -120,43 +106,43 @@ $rslt = $ldap->unbind;
 print "finished at ", `date`;
 
 
-# ######
-# # Build a hash ref of a user entry.
-# # lhs (left hand side):  attribute
-# # rhs (right hand side): list of values
-# sub build_zu_h($) {
-#     my $zmprov_ga = shift;
-
-#     my $h;
-
-#     my @a = split (/\n/, $zmprov_ga);
-
-#     map {
-# 	if (/^[^:]+:[^:]+/) {
-# 	    my ($lhs, $rhs) = split /:\s+/, $_;
-# 	    push @{$h->{lc $lhs}}, $rhs;
-# 	}
-#     } @a;
-
-#     return $h;
-# }
 
 ######
 sub add_user($) {
     my $lu = shift;
 
-    my $zmprov_cmd = "zmprov createAccount ". $lu->get_value("uid").
-	"@" . $zimbra_domain . " $zimbra_default_pass ";
+    print "\nadding: ", $lu->get_value("uid"), ", ",
+        $lu->get_value("cn"), "\n";
 
     my $z2l = get_z2l_map();
-   
-    for my $zattr (sort keys %$z2l) {
-	$zmprov_cmd .= "$zattr ";
-	$zmprov_cmd .= "\"".$lu->get_value($z2l->{$zattr}). "\" ";
-    }
 
-    print $zmprov_cmd . "\n";
-    #system $zmprov_cmd;
+    my $d = new XmlDoc;
+    $d->start('CreateAccountRequest', $MAILNS);
+    $d->add('name', $MAILNS, undef, $lu->get_value("uid")."@".$zimbra_domain);
+    for my $zattr (sort keys %$z2l) {
+	
+	my $v = $lu->get_value($z2l->{$zattr});
+
+	print "entering fix_case..\n";
+	$v = fix_case($v) 
+	    if (grep /^\s*$zattr\s*/, @z_attrs_2_fix_case);
+	print "out of fix_case..\n";
+
+#	$d->add('a', $MAILNS, {"n" => $zattr}, $lu->get_value($z2l->{$zattr}));
+	$d->add('a', $MAILNS, {"n" => $zattr}, $v);
+
+    }
+    $d->end();
+    print "here's what we're going to change:\n";
+    my $o = $d->to_string("pretty")."\n";
+    $o =~ s/ns0\://g;
+    print $o."\n";
+
+    my $r = $SOAP->invoke($url, $d->root(), $context);
+#     $o = $r->to_string("pretty");
+#     $o =~ s/ns0\://g;
+#     print $o."\n";
+
 }
 
 ######
@@ -165,11 +151,29 @@ sub sync_user($$) {
 
     my $z2l = get_z2l_map();
 
-    my $zmprov_suffix;
+    my $d = new XmlDoc();
+    $d->start('ModifyAccountRequest', $MAILNS);
+    $d->add('id', $MAILNS, undef, (@{$zu->{zimbraid}})[0]);
+
+    my $diff_found=0;
+
     for my $zattr (sort keys %$z2l) {
 	my $l_val_str = "";
 	my $z_val_str = "";
-	$l_val_str = join (' ', sort $lu->get_value($z2l->{$zattr}));
+
+
+	# map fix_case to each return of get_value() if it's 
+	#   a z_attrs_to_fix_case
+	if (grep /^\s*$zattr\s*/, @z_attrs_2_fix_case) {
+	    $l_val_str = join (' ', 
+			       map {
+				   fix_case($_);
+			       } sort $lu->get_value($z2l->{$zattr}));
+	} else {
+	    $l_val_str = join (' ', sort $lu->get_value($z2l->{$zattr}));
+	}
+
+
 	$z_val_str = join (' ', sort @{$zu->{$zattr}}) 
 	    unless !exists($zu->{$zattr});
 
@@ -178,20 +182,43 @@ sub sync_user($$) {
 #  	    "\t$zattr: $z_val_str\n";
 
 	if ($l_val_str ne $z_val_str) {
-	    print "difference: ($zattr) $z2l->{$zattr}\n".
-		"\t$z2l->{$zattr}: $l_val_str\n".
-		"\t$zattr: $z_val_str\n";
+# 	    print "difference: ($zattr) $z2l->{$zattr}\n".
+# 		"\t$z2l->{$zattr}: $l_val_str\n".
+# 		"\t$zattr: $z_val_str\n";
+
 	    map {
-		$zmprov_suffix .= " " . $zattr . " " . $_
-	    } $lu->get_value($z2l->{$zattr});
+ 		my $v = $_;
+
+   		$v = fix_case($_) 
+   		    if (grep /^\s*$zattr\s*/, @z_attrs_2_fix_case);
+		
+ 		$d->add('a', $MAILNS, {"n" => $zattr}, $v);
+
+ 	    } $lu->get_value($z2l->{$zattr});
+	    $diff_found++;
 	}
     }
-    
-    if (defined $zmprov_suffix) {
-	my $zmprov_ma = "zmprov ma ". shift(@{$zu->{mail}}) . $zmprov_suffix;
-	print $zmprov_ma . "\n";
-	#system $zmprov_ma;
+
+    $d->end();
+
+    if ($diff_found) {
+
+	print "\nsyncing ", $lu->get_value("uid"), ", ",
+            $lu->get_value("cn"),"\n";
+
+	print "here's what we're going to change:\n";
+	my $o = $d->to_string("pretty")."\n";
+	$o =~ s/ns0\://g;
+	print $o."\n";
+
+ 	my $r = $SOAP->invoke($url, $d->root(), $context);
+
+#   	print "response:\n";
+#   	$o = $r->to_string("pretty");
+#   	$o =~ s/ns0\://g;
+#   	print $o."\n";
     }
+
 }
 
 
@@ -219,10 +246,12 @@ sub print_usage() {
 
 
 sub get_z2l_map() {
-    # left (lhs):  zimbra ldap attribute
+    # left  (lhs): zimbra ldap attribute
     # right (rhs): corresponding enterprise ldap attribute.
     # 
     # It's safe to duplicate attributes on rhs.
+    #
+    # these should all be lower case
 
     return {
 	"cn" =>                    "cn",
@@ -249,7 +278,6 @@ sub get_z_user($) {
     my $middle_child = $resp->find_child('account');
      #my $delivery_addr_element = $resp->find_child('zimbraMailDeliveryAddress');
 
-#    print "num children: ", $middle_child->num_children(), "\n";
     # user entries return a list of XmlElements
     return undef if !defined $middle_child;
     for my $child (@{$middle_child->children()}) {
@@ -265,3 +293,165 @@ sub get_z_user($) {
 
     return $ret;
 }
+
+
+
+######
+sub fix_case($) {
+    my $s = shift;
+
+    print "top of fix_case, s: /".$s."/\n";
+
+    # upcase the first character after each
+    my $uc_after_exp = '\s\-\/\.&\'\(\)'; # exactly as you want it in [] 
+                                      #   (char class) in regex
+    # upcase these when they're standing alone
+    my @uc_clusters = qw/hs hr ms es avts pd/;
+
+    # upcase char after if a word starts with this
+    my @uc_after_if_first = qw/mc/;
+
+
+    # uc anything after $uc_after_exp characters
+    $s = ucfirst(lc($s));
+    my $work = $s;
+    $s = '';
+    while ($work =~ /[$uc_after_exp]+([a-z]{1})/) {
+	$s = $s . $` . uc $&;
+
+	my $s1 = $` . $&;
+	# parentheses and asterisks confuse regexes if they're not escaped.
+	#   we specifically use parenthesis and asterisks in the cn
+	$s1 =~ s/([\*\(\)]{1})/\\$1/g;
+
+	#$work =~ s/$`$&//;
+	$work =~ s/$s1//;
+
+    }
+    $s .= $work;
+
+
+    # uc anything in @uc_clusters
+    for my $cl (@uc_clusters) {
+	$s = join (' ', map ({
+	    if (lc $_ eq lc $cl){
+		uc($_);
+	    } else {
+		    $_;
+	    } } split(/ /, $s)));
+    }
+
+    
+    # uc anything after @uc_after_first
+    for my $cl2 (@uc_after_if_first) {
+
+	$s = join (' ', map ({ 
+ 	    if (lc $_ =~ /^$cl2([a-z]{1})/i) {
+
+		
+		my $pre =   ucfirst (lc $cl2);
+		my $thing = uc $1;
+		my $rest =  $_;
+		$rest =~ s/$cl2$thing//i;
+		$_ = $pre . $thing . $rest;
+ 	    } else {
+ 		$_;
+ 	    }}
+ 	    split(/ /, $s)));
+	
+    }
+
+    print "bottom of fix_case..\n";
+
+    return $s;
+}
+
+
+
+
+
+
+# ModifyAccount example:
+#
+# <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+#     <soap:Header>
+#         <context xmlns="urn:zimbra">
+#             <userAgent name="ZimbraWebClient - FF2.0 (Linux)"/>
+#             <sessionId id="3106"/>
+#             <authToken>
+#                 0_b70de391fdcdf4b0178bd2ea98508fee7ad8f422_69643d33363a61383836393466312d656131662d346462372d613038612d3939313766383737313532623b6578703d31333a313139363333333131363139373b61646d696e3d313a313b747970653d363a7a696d6272613b
+#             </authToken>
+#             <format type="js"/>
+#         </context>
+#     </soap:Header>
+#     <soap:Body>
+#         <ModifyAccountRequest xmlns="urn:zimbraAdmin">
+#             <id>
+#                 a95351c1-7590-46e2-9532-de20f2c5a046
+#             </id>
+#             <a n="displayName">
+#                 morgan jones (director of funny walks)
+#             </a>
+#         </ModifyAccountRequest>
+#     </soap:Body>
+# </soap:Envelope>
+
+
+
+# CreateAccount example:
+#
+# <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+#     <soap:Header>
+#         <context xmlns="urn:zimbra">
+#             <userAgent name="ZimbraWebClient - FF2.0 (Linux)"/>
+#             <sessionId id="331"/>
+#             <authToken>
+#                 0_d34449e3f2af2cd49b7ece9fb6dd1e2153cc55b8_69643d33363a61383836393466312d656131662d346462372d613038612d3939313766383737313532623b6578703d31333a313139363232333436303236343b61646d696e3d313a313b747970653d363a7a696d6272613b
+#             </authToken>
+#             <format type="js"/>
+#         </context>
+#     </soap:Header>
+#     <soap:Body>
+#         <CreateAccountRequest xmlns="urn:zimbraAdmin">
+#             <name>
+#                 morgan03@dmail02.domain.org
+#             </name>
+#             <a n="zimbraAccountStatus">
+#                 active
+#             </a>
+#             <a n="displayName">
+#                 morgan jones
+#             </a>
+#             <a n="givenName">
+#                 morgan
+#             </a>$
+#             <a n="sn">
+#                 jones
+#             </a>
+#         </CreateAccountRequest>
+#     </soap:Body>
+# </soap:Envelope>
+
+
+
+# GetAccount example:
+#
+# <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+#     <soap:Header>
+#         <context xmlns="urn:zimbra">
+#             <userAgent name="ZimbraWebClient - FF2.0 (Linux)"/>
+#             <sessionId id="325"/>
+#             <authToken>
+#                 0_d34449e3f2af2cd49b7ece9fb6dd1e2153cc55b8_69643d33363a61383836393466312d656131662d346462372d613038612d3939313766383737313532623b6578703d31333a313139363232333436303236343b61646d696e3d313a313b747970653d363a7a696d6272613b
+#             </authToken>
+#             <format type="js"/>
+#         </context>
+#     </soap:Header>
+#     <soap:Body>
+#         <GetAccountRequest xmlns="urn:zimbraAdmin" applyCos="0">
+#             <account by="id">
+#                 74faaafb-13db-40e4-bd0f-576069035521
+#             </account>
+#         </GetAccountRequest>
+#     </soap:Body>
+# </soap:Envelope>
