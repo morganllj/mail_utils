@@ -29,7 +29,7 @@ sub add_user($);
 sub sync_user($$);
 sub get_z_user($);
 sub fix_case($);
-sub build_value($$$);
+sub build_target_z_value($$);
 
 my $opts;
 getopts('h:D:w:b:em:nd', \%$opts);
@@ -42,7 +42,14 @@ my $url = "https://dmail02.domain.org:7071/service/admin/soap/";
 my $SOAP = $Soap::Soap12;
 
 # these accounts will never be removed or modified
-my @zimbra_special = qw/admin wiki spam* ham*/;
+#   use perl regex format.
+#
+#   This rule will cause you trouble if you have users that start with
+#   ham. or spam.  For instance: ham.jones.  Unlikely perhaps but
+#   possible.
+
+#my @zimbra_special = qw/admin wiki spam* ham*/;
+my $zimbra_special = '^admin|wiki|spam\.[a-z]+|ham\.[a-z]$';
 # run SDP case fixing algorithm (fix_case()) on these attrs.
 #   Basically upcase after spaces and certain chars
 my @z_attrs_2_fix_case = qw/cn displayname sn givenname/;
@@ -50,11 +57,12 @@ my @z_attrs_2_fix_case = qw/cn displayname sn givenname/;
 my $ldap_host = $opts->{h}     || print_usage();
 my $ldap_base = $opts->{b}     || "dc=domain,dc=org";
 my $binddn =    $opts->{D}     || "cn=Directory Manager";
-my $bindpass =  $opts->{w}     || "UoTM3rd";
+my $bindpass =  $opts->{w}     || "pass";
 my $zimbra_domain = $opts->{m} || "dmail02.domain.org";
 my $zimbra_default_pass = $opts->{p} || "pass";
 #my $fil = "(objectclass=posixAccount)";
-my $fil = "(|(orghomeorgcd=9500)(orghomeorgcd=8020))";
+my $fil = "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
+#my $fil = "(|(orghomeorgcd=9500)(orghomeorgcd=8020))";
 
 
 print "starting at ", `date`;
@@ -72,7 +80,8 @@ $d->start('AuthRequest', $ACCTNS);
 $d->add('name', undef, undef, "admin");
 $d->add('password', undef, undef, $zimbra_default_pass);
 $d->end();
-# get an authResponse, authToken, sessionId & context back.
+
+# get back an authResponse, authToken, sessionId & context.
 my $authResponse = $SOAP->invoke($url, $d->root());
 my $authToken = $authResponse->find_child('authToken')->content;
 my $sessionId = $authResponse->find_child('sessionId')->content;
@@ -85,6 +94,14 @@ $rslt->code && die "problem with search $fil: ".$rslt->error;
 
 for my $lusr ($rslt->entries) {
     my $usr = $lusr->get_value("uid");
+
+    # skip special users
+#    print "checking $usr against /$zimbra_special/\n";
+    if ($usr =~ /$zimbra_special/) {
+	print "skipping special user $usr because of rule /$_/\n"
+	    if (exists $opts->{d});
+	next;
+    }
 
     ### check for a corresponding zimbra account
     my $zu_h = get_z_user($usr);
@@ -141,7 +158,7 @@ sub add_user($) {
 # end after multi-values in z2l
 
 # after multi-values and literals in z2l
-	my $v = build_value('z',$lu, $zattr);
+	my $v = build_target_z_value($lu, $zattr);
 # end after multi-values & literals in z2l
 
 	$d->add('a', $MAILNS, {"n" => $zattr}, $v);
@@ -157,7 +174,7 @@ sub add_user($) {
     }
 
     my $r = $SOAP->invoke($url, $d->root(), $context)
-	if (exists $opts->{n});
+	if (!exists $opts->{n});
 
 
     if (exists $opts->{d} && !exists $opts->{n}) {
@@ -201,15 +218,18 @@ sub sync_user($$) {
 #	    unless !exists($zu->{$zattr});
 # end before    
 
-	$z_val_str = build_value('z', $lu, $zattr);
+	#$z_val_str = build_value($lu, $zattr);
+	$z_val_str = join (' ', sort @{$zu->{$zattr}});
 	#$l_val_str = join (' ', sort $lu->get_value($z2l->{$zattr}));
-	$l_val_str = build_value('l', $lu, $zattr);
 
-	if (exists $opts->{d}) {
-	    print "comparing values for $zattr:\n".
-		"\tldap:   $l_val_str\n".
-		"\tzimbra: $z_val_str\n";
-	}
+	# build the values from ldap using zimbra capitalization
+	$l_val_str = build_target_z_value($lu, $zattr);
+
+# 	if (exists $opts->{d}) {
+# 	    print "comparing values for $zattr:\n".
+# 		"\tldap:   $l_val_str\n".
+# 		"\tzimbra: $z_val_str\n";
+# 	}
 
 	if ($l_val_str ne $z_val_str) {
 	    if (exists $opts->{d}) {
@@ -228,7 +248,8 @@ sub sync_user($$) {
 
 #  	    } $lu->get_value($z2l->{$zattr});
 
-	    $d->add('a', $MAILNS, {"n" => $zattr}, $z_val_str);
+	    # if the values differ push the ldap version into Zimbra
+	    $d->add('a', $MAILNS, {"n" => $zattr}, $l_val_str);
 	    $diff_found++;
 	}
     }
@@ -247,7 +268,7 @@ sub sync_user($$) {
 	print $o."\n";
 
 	my $r = $SOAP->invoke($url, $d->root(), $context)
-	    if (exists $opts->{n});
+	    if (!exists $opts->{n});
 
 	if (exists $opts->{d} && !exists $opts->{n}) {
 	    print "response:\n";
@@ -408,8 +429,10 @@ sub fix_case($) {
 
 
 ######
-sub build_value($$$) {
-    my ($type, $lu, $zattr) = @_;
+#sub build_value($$$) {
+#    my ($type, $lu, $zattr) = @_;
+sub build_target_z_value($$) {
+    my ($lu, $zattr) = @_;
     
     my $z2l = get_z2l();
     
@@ -421,11 +444,11 @@ sub build_value($$$) {
 	    $ldap_v[0] = $_ 
 		if ($#ldap_v == -1);
 
-	    if ($type eq "z" && grep /^\s*$zattr\s*/, @z_attrs_2_fix_case) {
+#	    if ($type eq "z" && grep /^\s*$zattr\s*/, @z_attrs_2_fix_case) {
 		map { fix_case ($_) } @ldap_v;
-	    } else {
-		@ldap_v;
-	    }
+#	    } else {
+#		@ldap_v;
+#	    }
 	} @{$z2l->{$zattr}}
     );
 
