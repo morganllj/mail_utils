@@ -24,14 +24,15 @@ use XmlDoc;
 use Soap;
 
 sub print_usage();
-sub get_z2l_map();
+sub get_z2l();
 sub add_user($);
 sub sync_user($$);
 sub get_z_user($);
 sub fix_case($);
+sub build_value($$$);
 
 my $opts;
-getopts('h:D:w:b:ed:', \%$opts);
+getopts('h:D:w:b:em:nd', \%$opts);
 
 $|=1;
 my $ACCTNS = "urn:zimbraAdmin";
@@ -46,12 +47,11 @@ my @zimbra_special = qw/admin wiki spam* ham*/;
 #   Basically upcase after spaces and certain chars
 my @z_attrs_2_fix_case = qw/cn displayname sn givenname/;
 
-
 my $ldap_host = $opts->{h}     || print_usage();
 my $ldap_base = $opts->{b}     || "dc=domain,dc=org";
 my $binddn =    $opts->{D}     || "cn=Directory Manager";
-my $bindpass =  $opts->{w}     || "pass";
-my $zimbra_domain = $opts->{d} || "dmail02.domain.org";
+my $bindpass =  $opts->{w}     || "UoTM3rd";
+my $zimbra_domain = $opts->{m} || "dmail02.domain.org";
 my $zimbra_default_pass = $opts->{p} || "pass";
 #my $fil = "(objectclass=posixAccount)";
 my $fil = "(|(orghomeorgcd=9500)(orghomeorgcd=8020))";
@@ -114,34 +114,57 @@ sub add_user($) {
     print "\nadding: ", $lu->get_value("uid"), ", ",
         $lu->get_value("cn"), "\n";
 
-    my $z2l = get_z2l_map();
+    my $z2l = get_z2l();
 
     my $d = new XmlDoc;
     $d->start('CreateAccountRequest', $MAILNS);
     $d->add('name', $MAILNS, undef, $lu->get_value("uid")."@".$zimbra_domain);
     for my $zattr (sort keys %$z2l) {
-	
-	my $v = $lu->get_value($z2l->{$zattr});
 
-	print "entering fix_case..\n";
-	$v = fix_case($v) 
-	    if (grep /^\s*$zattr\s*/, @z_attrs_2_fix_case);
-	print "out of fix_case..\n";
+# before multi-values in z2l:	
+# 	my $v = $lu->get_value($z2l->{$zattr});
 
-#	$d->add('a', $MAILNS, {"n" => $zattr}, $lu->get_value($z2l->{$zattr}));
+# 	$v = fix_case($v) 
+# 	    if (grep /^\s*$zattr\s*/, @z_attrs_2_fix_case);
+# end before
+
+#after multi-values in z2l:
+#  	my $v = join ' ', (
+# 	    map {
+# 		if (grep /^\s*$zattr\s*/, @z_attrs_2_fix_case) {
+# 		    fix_case ($lu->get_value($_));
+# 		} else {
+# 		    $lu->get_value($_);
+# 		}
+# 	    } @{$z2l->{$zattr}}
+# 	);
+# end after multi-values in z2l
+
+# after multi-values and literals in z2l
+	my $v = build_value('z',$lu, $zattr);
+# end after multi-values & literals in z2l
+
 	$d->add('a', $MAILNS, {"n" => $zattr}, $v);
-
     }
     $d->end();
-    print "here's what we're going to change:\n";
-    my $o = $d->to_string("pretty")."\n";
-    $o =~ s/ns0\://g;
-    print $o."\n";
 
-    my $r = $SOAP->invoke($url, $d->root(), $context);
-#     $o = $r->to_string("pretty");
-#     $o =~ s/ns0\://g;
-#     print $o."\n";
+    my $o;
+    if (exists $opts->{d}) {
+	print "here's what we're going to change:\n";
+	$o = $d->to_string("pretty")."\n";
+	$o =~ s/ns0\://g;
+	print $o."\n";
+    }
+
+    my $r = $SOAP->invoke($url, $d->root(), $context)
+	if (exists $opts->{n});
+
+
+    if (exists $opts->{d} && !exists $opts->{n}) {
+	$o = $r->to_string("pretty");
+	$o =~ s/ns0\://g;
+	print $o."\n";
+    }
 
 }
 
@@ -149,7 +172,7 @@ sub add_user($) {
 sub sync_user($$) {
     my ($zu, $lu) = @_;
 
-    my $z2l = get_z2l_map();
+    my $z2l = get_z2l();
 
     my $d = new XmlDoc();
     $d->start('ModifyAccountRequest', $MAILNS);
@@ -162,39 +185,50 @@ sub sync_user($$) {
 	my $z_val_str = "";
 
 
-	# map fix_case to each return of get_value() if it's 
-	#   a z_attrs_to_fix_case
-	if (grep /^\s*$zattr\s*/, @z_attrs_2_fix_case) {
-	    $l_val_str = join (' ', 
-			       map {
-				   fix_case($_);
-			       } sort $lu->get_value($z2l->{$zattr}));
-	} else {
-	    $l_val_str = join (' ', sort $lu->get_value($z2l->{$zattr}));
+# before multi-values in z2l
+# 	# map fix_case to each return of get_value() if it's 
+# 	#   a z_attrs_to_fix_case
+# 	if (grep /^\s*$zattr\s*/, @z_attrs_2_fix_case) {
+# 	    $l_val_str = join (' ', 
+# 			       map {
+# 				   fix_case($_);
+# 			       } sort $lu->get_value($z2l->{$zattr}));
+# 	} else {
+# 	    $l_val_str = join (' ', sort $lu->get_value($z2l->{$zattr}));
+# 	}
+#
+#	$z_val_str = join (' ', sort @{$zu->{$zattr}}) 
+#	    unless !exists($zu->{$zattr});
+# end before    
+
+	$z_val_str = build_value('z', $lu, $zattr);
+	#$l_val_str = join (' ', sort $lu->get_value($z2l->{$zattr}));
+	$l_val_str = build_value('l', $lu, $zattr);
+
+	if (exists $opts->{d}) {
+	    print "comparing values for $zattr:\n".
+		"\tldap:   $l_val_str\n".
+		"\tzimbra: $z_val_str\n";
 	}
 
-
-	$z_val_str = join (' ', sort @{$zu->{$zattr}}) 
-	    unless !exists($zu->{$zattr});
-
-#  	print "comparing: ($zattr) $z2l->{$zattr}\n".
-#  	    "\t$z2l->{$zattr}: $l_val_str\n".
-#  	    "\t$zattr: $z_val_str\n";
-
 	if ($l_val_str ne $z_val_str) {
-# 	    print "difference: ($zattr) $z2l->{$zattr}\n".
-# 		"\t$z2l->{$zattr}: $l_val_str\n".
-# 		"\t$zattr: $z_val_str\n";
+	    if (exists $opts->{d}) {
+		print "difference values for $zattr:\n".
+		    "\tldap:   $l_val_str\n".
+		    "\tzimbra: $z_val_str\n";
+	    }
 
-	    map {
- 		my $v = $_;
+# 	    map {
+#  		my $v = $_;
 
-   		$v = fix_case($_) 
-   		    if (grep /^\s*$zattr\s*/, @z_attrs_2_fix_case);
+#    		$v = fix_case($_) 
+#    		    if (grep /^\s*$zattr\s*/, @z_attrs_2_fix_case);
 		
- 		$d->add('a', $MAILNS, {"n" => $zattr}, $v);
+#  		$d->add('a', $MAILNS, {"n" => $zattr}, $v);
 
- 	    } $lu->get_value($z2l->{$zattr});
+#  	    } $lu->get_value($z2l->{$zattr});
+
+	    $d->add('a', $MAILNS, {"n" => $zattr}, $z_val_str);
 	    $diff_found++;
 	}
     }
@@ -206,17 +240,21 @@ sub sync_user($$) {
 	print "\nsyncing ", $lu->get_value("uid"), ", ",
             $lu->get_value("cn"),"\n";
 
+	my $o;
 	print "here's what we're going to change:\n";
-	my $o = $d->to_string("pretty")."\n";
+	$o = $d->to_string("pretty")."\n";
 	$o =~ s/ns0\://g;
 	print $o."\n";
 
- 	my $r = $SOAP->invoke($url, $d->root(), $context);
+	my $r = $SOAP->invoke($url, $d->root(), $context)
+	    if (exists $opts->{n});
 
-#   	print "response:\n";
-#   	$o = $r->to_string("pretty");
-#   	$o =~ s/ns0\://g;
-#   	print $o."\n";
+	if (exists $opts->{d} && !exists $opts->{n}) {
+	    print "response:\n";
+	    $o = $r->to_string("pretty");
+	    $o =~ s/ns0\://g;
+	    print $o."\n";
+	}
     }
 
 }
@@ -226,10 +264,13 @@ sub sync_user($$) {
 ######
 sub print_usage() {
     print "\n";
-    print "usage: $0 [-e] -h <ldap host> [-b <basedn>] [-D <binddn>] ".
-	"[-w <bindpass>] [-d <Zimbra domain>] [-p <default pass>]\n";
+    print "usage: $0 [-n] [-d] [-e] -h <ldap host> [-b <basedn>]\n";
+    print "\t[-D <binddn>] [-w <bindpass>] [-d <Zimbra domain>]\n";
+    print "\t[-p <default pass>]\n";
     print "\n";
     print "\toptions in [] are optional\n";
+    print "\t-d debug\n";
+    print "\t-n print, don't make changes";
     print "\t-D <binddn> Must have unlimited sizelimit, lookthroughlimit\n".
 	"\t\tnearly Directory Manager privilege to view users.\n";
     print "\t-e exhaustive search.  Search out all Zimbra users and delete\n".
@@ -245,7 +286,7 @@ sub print_usage() {
 
 
 
-sub get_z2l_map() {
+sub get_z2l() {
     # left  (lhs): zimbra ldap attribute
     # right (rhs): corresponding enterprise ldap attribute.
     # 
@@ -253,12 +294,15 @@ sub get_z2l_map() {
     #
     # these should all be lower case
 
+    # orgOccupationalGroup
+
     return {
-	"cn" =>                    "cn",
-	"displayname" =>           "cn",
-	"zimbrapreffromdisplay" => "cn",
-	"sn" =>                    "sn",
-        "givenname" =>             "givenname"
+	"cn" =>                    ["cn"],
+	"displayname" =>           ["givenname", "sn", 
+				    "(", "orgoccupationalgroup", ")"],
+#	"zimbrapreffromdisplay" => ["cn"],
+	"sn" =>                    ["sn"],
+        "givenname" =>             ["givenname"]
 	};
 }
     
@@ -299,8 +343,6 @@ sub get_z_user($) {
 ######
 sub fix_case($) {
     my $s = shift;
-
-    print "top of fix_case, s: /".$s."/\n";
 
     # upcase the first character after each
     my $uc_after_exp = '\s\-\/\.&\'\(\)'; # exactly as you want it in [] 
@@ -361,12 +403,40 @@ sub fix_case($) {
 	
     }
 
-    print "bottom of fix_case..\n";
-
     return $s;
 }
 
 
+######
+sub build_value($$$) {
+    my ($type, $lu, $zattr) = @_;
+    
+    my $z2l = get_z2l();
+    
+    my $ret = join ' ', (
+	map {
+	    my @ldap_v = $lu->get_value($_);
+	    # use the literal value if there's no value in ldap
+	    #   designed for wrapping values in parentheses and the like.
+	    $ldap_v[0] = $_ 
+		if ($#ldap_v == -1);
+
+	    if ($type eq "z" && grep /^\s*$zattr\s*/, @z_attrs_2_fix_case) {
+		map { fix_case ($_) } @ldap_v;
+	    } else {
+		@ldap_v;
+	    }
+	} @{$z2l->{$zattr}}
+    );
+
+    # weirdo special case rule to remove space before after open
+    # parentheses and after close parentheses.  I don't think there's
+    # a better way/place to do this.
+    $ret =~ s/\(\s+/\(/;
+    $ret =~ s/\s+\)/\)/;
+
+    return $ret;
+}
 
 
 
