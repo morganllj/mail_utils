@@ -38,7 +38,8 @@ $|=1;
 my $ACCTNS = "urn:zimbraAdmin";
 my $MAILNS = "urn:zimbraAdmin";
 
-my $url = "https://dmail02.domain.org:7071/service/admin/soap/";
+#my $url = "https://dmail02.domain.org:7071/service/admin/soap/";
+my $url = "https://dmail01.domain.org:7071/service/admin/soap/";
 my $SOAP = $Soap::Soap12;
 
 # these accounts will never be removed or modified
@@ -49,16 +50,20 @@ my $SOAP = $Soap::Soap12;
 #   possible.
 
 #my @zimbra_special = qw/admin wiki spam* ham*/;
-my $zimbra_special = '^admin|wiki|spam\.[a-z]+|ham\.[a-z]$';
+my $zimbra_special = '^admin|wiki|spam\.[a-z]+|ham\.[a-z]+|ser$';
 # run SDP case fixing algorithm (fix_case()) on these attrs.
 #   Basically upcase after spaces and certain chars
 my @z_attrs_2_fix_case = qw/cn displayname sn givenname/;
+
+# attributes that will not be looked up in ldap when building z2l hash
+# (see sub get_z2l()
+my @z2l_literals = qw/( )/;
 
 my $ldap_host = $opts->{h}     || print_usage();
 my $ldap_base = $opts->{b}     || "dc=domain,dc=org";
 my $binddn =    $opts->{D}     || "cn=Directory Manager";
 my $bindpass =  $opts->{w}     || "pass";
-my $zimbra_domain = $opts->{m} || "dmail02.domain.org";
+my $zimbra_domain = $opts->{m} || "dev.domain.org";
 my $zimbra_default_pass = $opts->{p} || "pass";
 #my $fil = "(objectclass=posixAccount)";
 my $fil = "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
@@ -96,7 +101,6 @@ for my $lusr ($rslt->entries) {
     my $usr = $lusr->get_value("uid");
 
     # skip special users
-#    print "checking $usr against /$zimbra_special/\n";
     if ($usr =~ /$zimbra_special/) {
 	print "skipping special user $usr because of rule /$_/\n"
 	    if (exists $opts->{d});
@@ -137,30 +141,7 @@ sub add_user($) {
     $d->start('CreateAccountRequest', $MAILNS);
     $d->add('name', $MAILNS, undef, $lu->get_value("uid")."@".$zimbra_domain);
     for my $zattr (sort keys %$z2l) {
-
-# before multi-values in z2l:	
-# 	my $v = $lu->get_value($z2l->{$zattr});
-
-# 	$v = fix_case($v) 
-# 	    if (grep /^\s*$zattr\s*/, @z_attrs_2_fix_case);
-# end before
-
-#after multi-values in z2l:
-#  	my $v = join ' ', (
-# 	    map {
-# 		if (grep /^\s*$zattr\s*/, @z_attrs_2_fix_case) {
-# 		    fix_case ($lu->get_value($_));
-# 		} else {
-# 		    $lu->get_value($_);
-# 		}
-# 	    } @{$z2l->{$zattr}}
-# 	);
-# end after multi-values in z2l
-
-# after multi-values and literals in z2l
 	my $v = build_target_z_value($lu, $zattr);
-# end after multi-values & literals in z2l
-
 	$d->add('a', $MAILNS, {"n" => $zattr}, $v);
     }
     $d->end();
@@ -201,35 +182,17 @@ sub sync_user($$) {
 	my $l_val_str = "";
 	my $z_val_str = "";
 
-
-# before multi-values in z2l
-# 	# map fix_case to each return of get_value() if it's 
-# 	#   a z_attrs_to_fix_case
-# 	if (grep /^\s*$zattr\s*/, @z_attrs_2_fix_case) {
-# 	    $l_val_str = join (' ', 
-# 			       map {
-# 				   fix_case($_);
-# 			       } sort $lu->get_value($z2l->{$zattr}));
-# 	} else {
-# 	    $l_val_str = join (' ', sort $lu->get_value($z2l->{$zattr}));
-# 	}
-#
-#	$z_val_str = join (' ', sort @{$zu->{$zattr}}) 
-#	    unless !exists($zu->{$zattr});
-# end before    
-
-	#$z_val_str = build_value($lu, $zattr);
 	$z_val_str = join (' ', sort @{$zu->{$zattr}});
-	#$l_val_str = join (' ', sort $lu->get_value($z2l->{$zattr}));
 
 	# build the values from ldap using zimbra capitalization
 	$l_val_str = build_target_z_value($lu, $zattr);
 
-# 	if (exists $opts->{d}) {
-# 	    print "comparing values for $zattr:\n".
-# 		"\tldap:   $l_val_str\n".
-# 		"\tzimbra: $z_val_str\n";
-# 	}
+	# too much noise with a lot of users
+        # if (exists $opts->{d}) {
+        #     print "comparing values for $zattr:\n".
+	# 	"\tldap:   $l_val_str\n".
+	# 	"\tzimbra: $z_val_str\n";
+	# }
 
 	if ($l_val_str ne $z_val_str) {
 	    if (exists $opts->{d}) {
@@ -237,16 +200,6 @@ sub sync_user($$) {
 		    "\tldap:   $l_val_str\n".
 		    "\tzimbra: $z_val_str\n";
 	    }
-
-# 	    map {
-#  		my $v = $_;
-
-#    		$v = fix_case($_) 
-#    		    if (grep /^\s*$zattr\s*/, @z_attrs_2_fix_case);
-		
-#  		$d->add('a', $MAILNS, {"n" => $zattr}, $v);
-
-#  	    } $lu->get_value($z2l->{$zattr});
 
 	    # if the values differ push the ldap version into Zimbra
 	    $d->add('a', $MAILNS, {"n" => $zattr}, $l_val_str);
@@ -313,7 +266,10 @@ sub get_z2l() {
     # 
     # It's safe to duplicate attributes on rhs.
     #
-    # these should all be lower case
+    # These need to be all be lower case
+    #
+    # You can use literals (like '(' or ')') but you need to identify
+    # them in @z2l_literals at the top of the script.
 
     # orgOccupationalGroup
 
@@ -438,23 +394,27 @@ sub build_target_z_value($$) {
     
     my $ret = join ' ', (
 	map {
-	    my @ldap_v = $lu->get_value($_);
-	    # use the literal value if there's no value in ldap
-	    #   designed for wrapping values in parentheses and the like.
-	    $ldap_v[0] = $_ 
-		if ($#ldap_v == -1);
+    	    my @ldap_v;
+	    my $v = $_;
+	    
+	    map {
+		if ($v eq $_) {
+		   $ldap_v[0] = $v;
+		}} @z2l_literals;
 
-#	    if ($type eq "z" && grep /^\s*$zattr\s*/, @z_attrs_2_fix_case) {
+	    if ($#ldap_v < 0) {
+		@ldap_v = $lu->get_value($v);
 		map { fix_case ($_) } @ldap_v;
-#	    } else {
-#		@ldap_v;
-#	    }
+	    } else {
+		@ldap_v;
+	    }
+
 	} @{$z2l->{$zattr}}
     );
 
-    # weirdo special case rule to remove space before after open
-    # parentheses and after close parentheses.  I don't think there's
-    # a better way/place to do this.
+    # special case rule to remove space before after open parentheses
+    # and after close parentheses.  I don't think there's a better
+    # way/place to do this.
     $ret =~ s/\(\s+/\(/;
     $ret =~ s/\s+\)/\)/;
 
