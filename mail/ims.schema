@@ -1,3 +1,6 @@
+# Updated to work in OpenLDAP 2.3.0 by Morgan Jones (morgan@morganjones.org)
+# $Id $
+# originally:
 # converted to OpenLDAP (?; x500?) format by Eric Côté
 # (c) 2005 Eric Côté, GPL
 # SCHEMA FILE um50-common.oldap.schema Created on Tue Feb 15 13:59:24 2005
