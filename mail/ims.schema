@@ -1,0 +1,411 @@
+# converted to OpenLDAP (?; x500?) format by Eric Côté
+# (c) 2005 Eric Côté, GPL
+# SCHEMA FILE um50-common.oldap.schema Created on Tue Feb 15 13:59:24 2005
+
+#dn: cn=schema
+
+#Attributes
+attributetype ( 2.16.840.1.113730.3.1.601
+	NAME ( 'adminRole' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
+
+attributetype ( 2.16.840.1.113730.3.1.714
+	NAME ( 'mnggrpCurrentUsers' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.27
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.690
+	NAME ( 'inetDomainBaseDN' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.12
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.704
+	NAME ( 'memberOfManagedGroup' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.12
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.695
+	NAME ( 'inetSubscriberChallenge' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+	SINGLE-VALUE )
+
+attributetype ( 1.2.840.113556.1.2.102
+	NAME ( 'memberOf' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 )
+
+attributetype ( 2.16.840.1.113730.3.1.710
+	NAME ( 'mnggrpAdditionPolicy' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.697
+	NAME ( 'domOrgMaxUsers' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.27
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.702
+	NAME ( 'domainUidSeparator' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.703
+	NAME ( 'pabURI' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.701
+	NAME ( 'inetCanonicalDomainName' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.722
+	NAME ( 'organizationUnitName' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.713
+	NAME ( 'mnggrpMaxUsers' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.27
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.715
+	NAME ( 'mnggrpMailQuota' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.27
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.699
+	NAME ( 'inetDomainSearchFilter' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.705
+	NAME ( 'maxPabEntries' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.27
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.709
+	NAME ( 'mnggrpDeletionPolicy' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.706
+	NAME ( 'inetCOS' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.717
+	NAME ( 'un' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.693
+	NAME ( 'inetUserHttpURL' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.721
+	NAME ( 'dateOfBirth' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.711
+	NAME ( 'mnggrpBillableUser' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.12
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.700
+	NAME ( 'inetDomainCertMap' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.696
+	NAME ( 'inetSubscriberResponse' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.719
+	NAME ( 'memberOfPABGroup' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15  )
+
+attributetype ( 0.9.2342.19200300.100.1.3
+	NAME ( 'mail' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.13
+	NAME ( 'mailAlternateAddress' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15  )
+
+attributetype ( 2.16.840.1.113730.3.1.691
+	NAME ( 'inetDomainStatus' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.707
+	NAME ( 'vacationStartDate' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.712
+	NAME ( 'mnggrpStatus' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.720
+	NAME ( 'nickname' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.718
+	NAME ( 'memberOfPAB' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
+
+attributetype ( 2.16.840.1.113730.3.1.694
+	NAME ( 'inetSubscriberAccountId' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
+
+attributetype ( 2.16.840.1.113730.3.1.698
+	NAME ( 'domOrgNumUsers' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.27
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.716
+	NAME ( 'mnggrpUserClassOfServices' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )
+
+attributetype ( 2.16.840.1.113730.3.1.708
+	NAME ( 'vacationEndDate' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+	SINGLE-VALUE )
+
+attributetype ( 2.16.840.1.113730.3.1.692
+	NAME ( 'inetUserStatus' )
+	DESC 'User Defined Attribute'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+	SINGLE-VALUE )
+
+
+#Objectclasses
+objectclass ( 2.16.840.1.113730.3.2.129
+	NAME 'inetDomain'
+	DESC ''
+	SUP top
+	AUXILIARY
+	MAY ( inetDomainBaseDN $ inetDomainStatus ) )
+
+# Structural class for creating domain alias entries in the directory. 
+# Entries may be created in the domain component tree that point at other 
+# hosted domain objects. Such domain alias entries must use this object class. 
+# Attribute aliasedObjectName, inherited from the parent object class alias 
+# (see RFC2256), holds the DN of the LDAP entry for which the node is an alias.
+objectclass ( 2.16.840.1.113730.3.2.131
+	NAME 'inetDomainAlias'
+	DESC ''
+	SUP alias
+	STRUCTURAL
+	MUST ( dc ) )
+
+# Auxiliary class for supporting a managed domain organization. 
+# This object class is used in conjunction with the structural class 
+# organization to define a domain organization. A domain organization is 
+# usually created as a way of introducing hierarchy beneath a customer subtree 
+# and assigning administrators for that domain organization. For example, 
+# siroe.com could have a customer subtree with the DN o=Siroe Inc.,o=ISP. 
+# To create a sub-organization beneath the parent tree and designate a set 
+# of administrators for that sub-organization, you would create a Domain 
+# Organization node by using organization and inetDomainOrg object classes.
+objectclass ( 2.16.840.1.113730.3.2.132
+	NAME 'inetDomainOrg'
+	DESC ''
+	SUP top
+	AUXILIARY
+	MAY ( domOrgMaxUsers $ domOrgNumUsers ) )
+
+# This object class is used to extend the domain entry with search filter, 
+# domain cert map, and a canonical domain name if more than one hosted domain 
+# refers to the same organization subtree.
+objectclass ( 2.16.840.1.113730.3.2.133
+	NAME 'inetDomainAuthInfo'
+	DESC ''
+	SUP top
+	AUXILIARY
+	MAY ( inetDomainSearchFilter $ inetDomainCertMap
+		$ domainUidSeparator $ inetCanonicalDomainName ) )
+
+# Used to extend the base entry created by inetOrgPerson. It represents 
+# a user account and is used in conjunction with inetMailUser and 
+# ipUser for creating a mail account. This can be used with icsUser 
+# for creating a calendar account.
+objectclass ( 2.16.840.1.113730.3.2.130
+	NAME 'inetUser'
+	DESC 'extends inetOrgPerson. create a mail account with ipUser and inetMailUser'
+	SUP top
+	AUXILIARY
+	MAY ( uid $ inetUserStatus $ userPassword 
+		$ inetUserHttpURL $ memberOf ) )
+
+# Used to extend the base entry created by groupOfUniqueNames. 
+# inetMailGroupManagement is used to store attributes for managing a 
+# distribution list by using Delegated Administrator for Messaging. 
+# This object class is used in conjunction with inetMailGroup and 
+# inetLocalMailRecipient. The attributes in this object class have no 
+# operational impact on the messaging server's MTA or message access/message store.
+objectclass ( 2.16.840.1.113730.3.2.149
+	NAME 'inetMailGroupManagement'
+	DESC 'distribution list management'
+	SUP top
+	AUXILIARY
+	MAY ( mgmanAllowSubscribe $ mgmanDenySubscribe $ mgmanHidden 
+		$ mgmanJoinability $ mgmanMemberVisibility $ mgmanIntroText
+		$ mgmanGoodbyeText $ multiLineDescription ) )
+
+# extend the base entry created by inetOrgPerson to define a messaging 
+# service user. It represents a mail account and is used in conjunction 
+# with inetUser and inetLocalMailRecipient. Optionally, inetSubscriber 
+# may also be used for general account management purposes.
+objectclass ( 2.16.840.1.113730.3.2.146
+	NAME 'inetMailUser'
+	DESC 'extends inetOrgPerson for mail purposes'
+	SUP top
+	AUXILIARY
+	MAY ( mailAutoReplyTimeOut $ mailAutoReplySubject $ mailAutoReplyText 
+		$ mailAutoReplyTextInternal $ mailAutoReplyMode $ mailDeliveryOption
+		$ mailForwardingAddress $ mailMessageStore $ mailProgramDeliveryInfo
+		$ mailQuota $ mailMsgQuota $ mailSieveRuleSource $ mailAllowedServiceAccess
+		$ nswmExtendedUserPrefs $ dataSource $ mailUserStatus
+		$ mailSMTPSubmitChannel $ cn ) )
+
+objectclass ( 2.16.840.1.113730.3.2.134
+	NAME 'inetSubscriber'
+	DESC ''
+	SUP top
+	AUXILIARY
+	MAY ( inetSubscriberAccountId $ inetSubscriberChallenge 
+		$ inetSubscriberResponse ) )
+
+# Object class for services like mail and calendar. Used to extend the 
+# base entry created by inetOrgPerson and inetUser. This object class 
+# holds the reference to the personal address book container and the 
+# class of service specifier.
+objectclass ( 2.16.840.1.113730.3.2.135
+	NAME 'ipUser'
+	DESC ''
+	SUP top
+	AUXILIARY
+	MAY ( pabURI $ memberOfManagedGroup $ maxPabEntries $ inetCOS ) )
+
+objectclass ( 2.16.840.1.113730.3.2.136
+	NAME 'userPresenceProfile'
+	DESC ''
+	SUP top
+	AUXILIARY
+	MAY ( vacationStartDate $ vacationEndDate ) )
+
+# Auxiliary class used to extend the base entry created by domain 
+# and inetDomain for enabling messaging services for the hosted domain. 
+# It represents a hosted domain account with access to Messaging Service. 
+# This object class must be used for all hosted domain entries.
+objectclass ( 2.16.840.1.113730.3.2.151
+	NAME 'mailDomain'
+	DESC 'messaging services for the hosted domain'
+	SUP top
+	AUXILIARY
+	MAY ( mailRoutingHosts $ mailRoutingSmartHost $ preferredMailHost
+		$ preferredMailMessageStore $ mailAccessProxyPreAuth $ mailAccessProxyReplay
+		$ mailDomainAllowedServiceAccess $ mailDomainWelcomeMessage
+		$ mailDomainDiskQuota $ mailDomainMsgQuota $ mailClientAttachmentQuota
+		$ mailQuota $ mailDomainStatus $ preferredLanguage ) )
+
+
+# Auxiliary class for supporting the notion of a vanity domain for 
+# messaging. Used to extend the base mail user entry to assign a 
+# vanity domain to the user.
+objectclass ( 2.16.840.1.113730.3.2.150
+	NAME 'msgVanityDomainUser'
+	SUP top
+	AUXILIARY
+	MAY ( msgVanityDomain ) )
+
+
+objectclass ( 2.16.840.1.113730.3.2.112
+	NAME 'inetAdmin'
+	DESC ''
+	SUP top
+	AUXILIARY
+	MAY ( memberOf $ adminRole ) )
+
+objectclass ( 2.16.840.1.113730.3.2.137
+	NAME 'inetManagedGroup'
+	DESC ''
+	SUP top
+	STRUCTURAL
+	MUST ( commonname )
+	MAY ( mnggrpDeletionPolicy $ mnggrpAdditionPolicy 
+		$ mnggrpBillableUser $ description $ mnggrpStatus 
+		$ mnggrpMaxUsers $ mnggrpCurrentUsers $ mnggrpMailQuota 
+		$ owner $ nsdaModifiableBy $ mnggrpUserClassOfServices ) )
+
+# The following three object classes define the Personal Address Book
+objectclass ( 2.16.840.1.113730.3.2.138
+	NAME 'pabPerson'
+	DESC ''
+	SUP inetOrgPerson
+	AUXILIARY
+	MAY ( un $ organizationName $ organizationUnitName 
+		$ co $ mailAlternateAddress $ dateOfBirth $ memberOfPAB 
+		$ memberOfPABGroup $ nickName $ calCalURI $ calFBURL ) )
+# http://docs.sun.com/source/816-5999-10/objects.htm
+# says STRUCTURAL....
+
+objectclass ( 2.16.840.1.113730.3.2.139
+	NAME 'pabGroup'
+	DESC ''
+	SUP top
+	STRUCTURAL
+	MUST ( cn )
+	MAY ( un $ memberOfPAB $ nickName $ description ) )
+
+objectclass ( 2.16.840.1.113730.3.2.140
+	NAME 'pab'
+	DESC ''
+	SUP top
+	STRUCTURAL
+	MUST ( cn )
+	MAY ( un $ description ) )
+
