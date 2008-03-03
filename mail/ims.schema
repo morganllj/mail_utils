@@ -1,5 +1,5 @@
 # Updated to work in OpenLDAP 2.3.0 by Morgan Jones (morgan@morganjones.org)
-# Id: $Id: $
+# Id: $Id$
 # originally:
 # converted to OpenLDAP (?; x500?) format by Eric Côté
 # (c) 2005 Eric Côté, GPL
