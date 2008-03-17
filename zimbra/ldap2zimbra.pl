@@ -16,7 +16,7 @@ use Data::Dumper;
 
 # The Zimbra SOAP libraries.  Download and uncompress the Zimbra
 # source code to get them.
-use lib "/home/morgan/zcs-5.0.0_RC1_1538-src/ZimbraServer/src/perl/soap";
+use lib "/home/morgan/Docs/zimbra/zcs-5.0.2_GA_1975-src/ZimbraServer/src/perl/soap";
 
 #use LWP::UserAgent;
 use XmlElement;
@@ -30,6 +30,7 @@ sub sync_user($$);
 sub get_z_user($);
 sub fix_case($);
 sub build_target_z_value($$);
+sub delete_not_in_ldap();
 
 my $opts;
 getopts('h:D:w:b:em:nd', \%$opts);
@@ -38,19 +39,21 @@ $|=1;
 my $ACCTNS = "urn:zimbraAdmin";
 my $MAILNS = "urn:zimbraAdmin";
 
-#my $url = "https://dmail02.domain.org:7071/service/admin/soap/";
 my $url = "https://dmail01.domain.org:7071/service/admin/soap/";
 my $SOAP = $Soap::Soap12;
 
-# these accounts will never be removed or modified
+# these accounts will never be added, removed or modified
 #   use perl regex format.
 #
 #   This rule will cause you trouble if you have users that start with
-#   ham. or spam.  For instance: ham.jones.  Unlikely perhaps but
-#   possible.
+#   ham or spam  For instance: ham.let.  Unlikely perhaps.
 
-#my @zimbra_special = qw/admin wiki spam* ham*/;
-my $zimbra_special = '^admin|wiki|spam\.[a-z]+|ham\.[a-z]+|ser$';
+#my @zimbra_special = qw/admin wiki spam* ham* gab mlehmann/;
+my $zimbra_special = '^admin|wiki|spam\.[a-z]+|ham\.[a-z]+|'. # Zimbra supplied
+                     'ser|mlehmann|gab|morgan|cferet|'.  
+                                               # Steve, Matt, Gary, Feret and I
+                     'sjones|aharris|'.        # Gary's test users
+                     'hammy|spammy$';          # Spam training users 
 # run SDP case fixing algorithm (fix_case()) on these attrs.
 #   Basically upcase after spaces and certain chars
 my @z_attrs_2_fix_case = qw/cn displayname sn givenname/;
@@ -65,12 +68,16 @@ my $binddn =    $opts->{D}     || "cn=Directory Manager";
 my $bindpass =  $opts->{w}     || "pass";
 my $zimbra_domain = $opts->{m} || "dev.domain.org";
 my $zimbra_default_pass = $opts->{p} || "pass";
-#my $fil = "(objectclass=posixAccount)";
-my $fil = "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
+my $fil = "(objectclass=posixAccount)";
+#my $fil = "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
 #my $fil = "(|(orghomeorgcd=9500)(orghomeorgcd=8020))";
 
+# has ref to store a list of users added/modified to extra users can
+# be deleted from zimbra.
+my $all_users;
 
-print "starting at ", `date`;
+
+print "\nstarting at ", `date`;
 ### keep track of accounts in ldap and added.
 ### search out every account in ldap.
 
@@ -97,12 +104,15 @@ print "searching out users $fil\n";
 $rslt = $ldap->search(base => "$ldap_base", filter => $fil);
 $rslt->code && die "problem with search $fil: ".$rslt->error;
 
+print "\nadd/modify phase..\n";
 for my $lusr ($rslt->entries) {
     my $usr = $lusr->get_value("uid");
 
+    $all_users->{$usr} = 1;
+
     # skip special users
     if ($usr =~ /$zimbra_special/) {
-	print "skipping special user $usr because of rule /$_/\n"
+	print "skipping special user $usr\n"
 	    if (exists $opts->{d});
 	next;
     }
@@ -116,6 +126,10 @@ for my $lusr ($rslt->entries) {
  	sync_user($zu_h, $lusr)
     }
 }
+
+
+#print "\ndelete phase..\n";
+#delete_not_in_ldap();
 
 
 ### get a list of zimbra accounts, compare to ldap accounts, delete
@@ -132,7 +146,7 @@ print "finished at ", `date`;
 sub add_user($) {
     my $lu = shift;
 
-    print "\nadding: ", $lu->get_value("uid"), ", ",
+    print "***adding: ", $lu->get_value("uid"), ", ",
         $lu->get_value("cn"), "\n";
 
     my $z2l = get_z2l();
@@ -244,7 +258,7 @@ sub print_usage() {
     print "\n";
     print "\toptions in [] are optional\n";
     print "\t-d debug\n";
-    print "\t-n print, don't make changes";
+    print "\t-n print, don't make changes\n";
     print "\t-D <binddn> Must have unlimited sizelimit, lookthroughlimit\n".
 	"\t\tnearly Directory Manager privilege to view users.\n";
     print "\t-e exhaustive search.  Search out all Zimbra users and delete\n".
@@ -423,6 +437,78 @@ sub build_target_z_value($$) {
 
 
 
+sub delete_not_in_ldap() {
+    my $d = new XmlDoc;
+    $d->start('SearchDirectoryRequest', $MAILNS,
+	{'sortBy' => "uid",
+	 'attrs'  => "uid",
+	 'types'  => "accounts"}
+    ); 
+    #{ $d->add('account', $MAILNS, { "by" => "name" }, $u);} 
+    { $d->add('query', $MAILNS,);} 
+    $d->end();
+
+    my $o;
+    my $r = $SOAP->invoke($url, $d->root(), $context);
+
+    print "returned ", $r->num_children, " children\n";
+    
+    my $children = $r->children();
+
+#     for my $child (@$children) {
+# 	#print Dumper ($child);
+# 	for my $attr (@{$child->children}) {
+#  	    if ((values %{$attr->attrs()})[0] eq "uid") {
+#  		my $uid = $attr->content();
+# 		if (!exists $all_users->{$uid} && $uid !~ $zimbra_special) {
+# 		    print "would delete $uid..\n";
+# 		}
+#  	    }
+# 	}
+
+#     }
+
+    for my $child (@$children) {
+	my ($uid, $z_id);
+	#print Dumper ($child);
+	for my $attr (@{$child->children}) {
+ 	    if ((values %{$attr->attrs()})[0] eq "uid") {
+ 		$uid = $attr->content();
+	    }
+ 	    if ((values %{$attr->attrs()})[0] eq "zimbraId") {
+ 		$z_id = $attr->content();
+ 	    }
+	}
+	if (!exists $all_users->{$uid} && $uid !~ $zimbra_special) {
+	    print "***deleting $uid, $z_id..\n";
+
+	    my $d = new XmlDoc;
+	    $d->start('DeleteAccountRequest', $MAILNS);
+	    $d->add('id', $MAILNS, undef, $z_id);
+	    $d->end();
+
+	    if (!exists $opts->{n}){
+		my $r = $SOAP->invoke($url, $d->root(), $context);
+
+#		if (exists $opts->{d}) {
+		    $o = $r->to_string("pretty");
+		    $o =~ s/ns0\://g;
+		    print $o."\n";
+#		}
+	    }
+	}
+    }
+
+#    print "response:\n";
+#    $o = $r->to_string("pretty");
+#    $o =~ s/ns0\://g;
+#    print $o."\n";
+    
+}
+    
+
+
+
 
 # ModifyAccount example:
 #
@@ -506,5 +592,49 @@ sub build_target_z_value($$) {
 #                 74faaafb-13db-40e4-bd0f-576069035521
 #             </account>
 #         </GetAccountRequest>
+#     </soap:Body>
+# </soap:Envelope>
+
+
+
+# search directory request:
+#
+# <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+# <soap:Header>
+# <context xmlns="urn:zimbra">
+# <userAgent name="ZimbraWebClient - FF2.0 (Linux)"/>
+# <sessionId id="3481"/>
+# <authToken>
+# 0_8b41a60cf6a7dc8cb7c7e00fc66f939ce66cad5f_69643d33363a38373834623434372d346562332d343934342d626230662d6362373734303061303466653b6578703d31333a313139383930323638303831343b61646d696e3d313a313b747970653d363a7a696d6272613b
+# </authToken>
+# <format type="js"/>
+# </context>
+# </soap:Header>
+# <soap:Body>
+# <SearchDirectoryRequest xmlns="urn:zimbraAdmin" offset="0" limit="25" sortBy="name" sortAscending="1" attrs="displayName,zimbraId,zimbraMailHost,uid,zimbraAccountStatus,zimbraLastLogonTimestamp,description,zimbraMailStatus,zimbraCalResType,zimbraDomainType,zimbraDomainName" types="accounts">
+# <query/>
+# </SearchDirectoryRequest>
+# </soap:Body>
+# </soap:Envelope>
+
+
+# DeleteAccountRequest:
+# <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+#     <soap:Header>
+#         <context xmlns="urn:zimbra">
+#             <userAgent name="ZimbraWebClient - FF2.0 (Linux)"/>
+#             <sessionId id="318864"/>
+#             <format type="js"/>
+#             <authToken>
+#                 0_7b49e3d97c1a15ef72f5a0a344bfe417b82fc9a6_69643d33363a38323539616631392d313031302d343366392d613338382d6439393038363234393862623b6578703d31333a313230353830353735353338343b61646d696e3d313a313b747970653d363a7a696d6272613b6d61696c686f73743d31363a3137302e3233352e312e3234313a38303b
+#             </authToken>
+#         </context>
+#     </soap:Header>
+#     <soap:Body>
+#         <DeleteAccountRequest xmlns="urn:zimbraAdmin">
+#             <id>
+#                 74c747fb-f209-475c-82c0-04fa09c5dedb
+#             </id>
+#         </DeleteAccountRequest>
 #     </soap:Body>
 # </soap:Envelope>
