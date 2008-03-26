@@ -129,7 +129,6 @@ for my $lusr ($rslt->entries) {
     }
 }
 
-
 print "\ndelete phase..\n";
 delete_not_in_ldap();
 
@@ -227,26 +226,26 @@ sub sync_user($$) {
 
     if ($diff_found) {
 
-	print "\nsyncing ", $lu->get_value("uid"), ", ",
+	print "\n***syncing ", $lu->get_value("uid"), ", ",
             $lu->get_value("cn"),"\n";
 
 	my $o;
-	print "here's what we're going to change:\n";
-	$o = $d->to_string("pretty")."\n";
+	print "changes:\n";
+	$o = $d->to_string("pretty");
 	$o =~ s/ns0\://g;
 	print $o."\n";
 
-	my $r = $SOAP->invoke($url, $d->root(), $context)
-	    if (!exists $opts->{n});
+	if (!exists $opts->{n}) {
+	    my $r = $SOAP->invoke($url, $d->root(), $context);
 
-	if (exists $opts->{d} && !exists $opts->{n}) {
-	    print "response:\n";
-	    $o = $r->to_string("pretty");
-	    $o =~ s/ns0\://g;
-	    print $o."\n";
+	    if (exists $opts->{d}) {
+		print "response:\n";
+		$o = $r->to_string("pretty");
+		$o =~ s/ns0\://g;
+		print $o."\n";
+	    }
 	}
     }
-
 }
 
 
