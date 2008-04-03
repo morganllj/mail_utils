@@ -31,6 +31,7 @@ sub get_z_user($);
 sub fix_case($);
 sub build_target_z_value($$);
 sub delete_not_in_ldap();
+sub delete_in_range($$$);
 
 my $opts;
 getopts('h:D:w:b:em:ndz:', \%$opts);
@@ -78,7 +79,6 @@ my $SOAP = $Soap::Soap12;
 # be deleted from zimbra.
 my $all_users;
 
-
 print "\nstarting at ", `date`;
 ### keep track of accounts in ldap and added.
 ### search out every account in ldap.
@@ -100,6 +100,13 @@ my $authResponse = $SOAP->invoke($url, $d->root());
 my $authToken = $authResponse->find_child('authToken')->content;
 my $sessionId = $authResponse->find_child('sessionId')->content;
 my $context = $SOAP->zimbraContext($authToken, $sessionId);
+
+
+
+print "deleting early..\n";
+delete_not_in_ldap();
+exit 0;
+
 
 
 print "searching out users $fil\n";
@@ -438,8 +445,85 @@ sub build_target_z_value($$) {
 
 
 
+# a, b, c, d .. z
+# a, aa, ab, ac .. az, ba, bb .. zz
+# a, aa, aaa, aab, aac ... zzz
+
+
+
+
+sub delete_in_range($$$) {
+    my ($prfx, $beg, $end) = @_;
+
+    print "deleting ";
+    print "${beg}..${end}";
+    print "w/ prfx $prfx " if (defined $prfx);
+    print "\n";
+
+    for my $l (${beg}..${end}) {
+	my $fil = 'uid=';
+	$fil .= $prfx if (defined $prfx);
+	$fil .= "${l}\*";
+
+	print "searching $fil\n";
+	my $d = new XmlDoc;
+	$d->start('SearchDirectoryRequest', $MAILNS);
+	$d->add('query', $MAILNS, undef, $fil);
+	$d->end;
+	
+	my $r = $SOAP->invoke($url, $d->root(), $context);
+ 	if ($r->name eq "Fault" || !defined $prfx || 
+	    scalar (split //, $prfx) < 2 ) {
+# 	    # TODO: limit recursion depth
+	    print "Fault return.. recursing deeper to return fewer results.\n";
+	    my $prfx2pass = $l;
+	    $prfx2pass = $prfx . $prfx2pass if defined $prfx;
+ 	    delete_in_range ($prfx2pass, $beg, $end);
+ 	} else {
+	    for my $child (@{$r->children()}) {
+		my ($uid, $z_id);
+
+		for my $attr (@{$child->children}) {
+		    if ((values %{$attr->attrs()})[0] eq "uid") {
+			$uid = $attr->content();
+		    }
+		    if ((values %{$attr->attrs()})[0] eq "zimbraId") {
+			$z_id = $attr->content();
+		    }
+		}
+		if (defined $uid && defined $z_id && 
+		    !exists $all_users->{$uid} && $uid !~ $zimbra_special) {
+		    print "***deleting $uid, $z_id..\n";
+
+#         <DeleteAccountRequest xmlns="urn:zimbraAdmin">
+#             <id>
+#                 74c747fb-f209-475c-82c0-04fa09c5dedb
+#             </id>
+
+		    my $d = new XmlDoc;
+		    $d->start('DeleteAccountRequest', $MAILNS);
+		    $d->add('id', $MAILNS, undef, $z_id);
+		    $d->end();
+
+		    if (!exists $opts->{n}){
+			my $r = $SOAP->invoke($url, $d->root(), $context);
+			
+			if (exists $opts->{d}) {
+			    my $o = $r->to_string("pretty");
+			    $o =~ s/ns0\://g;
+			    print $o."\n";
+			}
+		    }
+		}
+	    }
+        }
+    }
+}
+
+
+
 sub delete_not_in_ldap() {
-    my $d = new XmlDoc;
+    $d = new XmlDoc;
     $d->start('SearchDirectoryRequest', $MAILNS,
 	{'sortBy' => "uid",
 	 'attrs'  => "uid",
@@ -449,31 +533,35 @@ sub delete_not_in_ldap() {
     { $d->add('query', $MAILNS, { "types" => "accounts" });} 
     $d->end();
 
-    my $o;
+
     my $r = $SOAP->invoke($url, $d->root(), $context);
 
     if ($r->name eq "Fault") {
-	my ($reason, $detail);
+	# break down the search by alpha/numeric
 	
-	for my $c ($r->children()) {
-	    # print Dumper($c);
+	delete_in_range(undef, "a", "z");
+	
+# 	my ($reason, $detail);
+	
+# 	for my $c ($r->children()) {
+# 	    # print Dumper($c);
 
-	    for my $c2 (@$c) {
-		my $c3 = $c2->children();
-		for my $c4 (@$c3) {
-		    $reason = $c4->content
-			if ($c4->name eq "Text");
-		}
-	    }
-	}
+# 	    for my $c2 (@$c) {
+# 		my $c3 = $c2->children();
+# 		for my $c4 (@$c3) {
+# 		    $reason = $c4->content
+# 			if ($c4->name eq "Text");
+# 		}
+# 	    }
+# 	}
 
-	print "fault during delete";
+# 	print "fault during delete";
 
-	if (defined $reason) {
-	    print ", reason: ", $reason, "\n\n";
-	} else {
-	    print "\n";
-	}
+# 	if (defined $reason) {
+# 	    print ", reason: ", $reason, "\n\n";
+# 	} else {
+# 	    print "\n";
+# 	}
 
 	return;
     }
@@ -526,7 +614,7 @@ sub delete_not_in_ldap() {
 		my $r = $SOAP->invoke($url, $d->root(), $context);
 
 		if (exists $opts->{d}) {
-		    $o = $r->to_string("pretty");
+		    my $o = $r->to_string("pretty");
 		    $o =~ s/ns0\://g;
 		    print $o."\n";
 		}
@@ -632,24 +720,46 @@ sub delete_not_in_ldap() {
 
 
 
-# search directory request:
+# SearchDirectoryRequest for all users:
 #
 # <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
-# <soap:Header>
-# <context xmlns="urn:zimbra">
-# <userAgent name="ZimbraWebClient - FF2.0 (Linux)"/>
-# <sessionId id="3481"/>
-# <authToken>
-# 0_8b41a60cf6a7dc8cb7c7e00fc66f939ce66cad5f_69643d33363a38373834623434372d346562332d343934342d626230662d6362373734303061303466653b6578703d31333a313139383930323638303831343b61646d696e3d313a313b747970653d363a7a696d6272613b
-# </authToken>
-# <format type="js"/>
-# </context>
-# </soap:Header>
-# <soap:Body>
-# <SearchDirectoryRequest xmlns="urn:zimbraAdmin" offset="0" limit="25" sortBy="name" sortAscending="1" attrs="displayName,zimbraId,zimbraMailHost,uid,zimbraAccountStatus,zimbraLastLogonTimestamp,description,zimbraMailStatus,zimbraCalResType,zimbraDomainType,zimbraDomainName" types="accounts">
-# <query/>
-# </SearchDirectoryRequest>
-# </soap:Body>
+#     <soap:Header>
+#         <context xmlns="urn:zimbra">
+#             <userAgent name="ZimbraWebClient - FF2.0 (Linux)"/>
+#             <sessionId id="3481"/>
+#             <authToken>
+#                 0_8b41a60cf6a7dc8cb7c7e00fc66f939ce66cad5f_69643d33363a38373834623434372d346562332d343934342d626230662d6362373734303061303466653b6578703d31333a313139383930323638303831343b61646d696e3d313a313b747970653d363a7a696d6272613b
+#             </authToken>
+#             <format type="js"/>
+#         </context>
+#     </soap:Header>
+#     <soap:Body>
+#         <SearchDirectoryRequest xmlns="urn:zimbraAdmin" offset="0" limit="25" sortBy="name" sortAscending="1" attrs="displayName,zimbraId,zimbraMailHost,uid,zimbraAccountStatus,zimbraLastLogonTimestamp,description,zimbraMailStatus,zimbraCalResType,zimbraDomainType,zimbraDomainName" types="accounts">
+#             <query/>
+#         </SearchDirectoryRequest>
+#     </soap:Body>
+# </soap:Envelope>
+#
+#
+# search directory request for a pattern:
+# <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+#     <soap:Header>
+#         <context xmlns="urn:zimbra">
+#             <userAgent name="ZimbraWebClient - FF2.0 (Linux)" version="undefined"/>
+#             <sessionId id="277"/>
+#             <authToken>
+#                 0_93974500ed275ab35612e0a73d159fa8ba460f2a_69643d33363a30616261316231362d383364352d346663302d613432372d6130313737386164653032643b6578703d31333a313230363539303038353132383b61646d696e3d313a313b
+#             </authToken>
+#             <format type="js"/>
+#         </context>
+#     </soap:Header>
+#     <soap:Body>
+#         <SearchDirectoryRequest xmlns="urn:zimbraAdmin" offset="0" limit="25" sortBy="name" sortAscending="1" attrs="displayName,zimbraId,zimbraMailHost,uid,zimbraAccountStatus,description,zimbraMailStatus,zimbraCalResType,zimbraDomainType,zimbraDomainName" types="accounts">
+#             <query>
+#                 (|(uid=*morgan*)(cn=*morgan*)(sn=*morgan*)(gn=*morgan*)(displayName=*morgan*)(zimbraId=morgan)(mail=*morgan*)(zimbraMailAlias=*morgan*)(zimbraMailDeliveryAddress=*morgan*)(zimbraDomainName=*morgan*))
+#             </query>
+#         </SearchDirectoryRequest>
+#     </soap:Body>
 # </soap:Envelope>
 
 
