@@ -9,19 +9,73 @@
 # One way sync: define attributes mastered by LDAP, sync them to
 # Zimbra.  attributes mastered by Zimbra do not go to LDAP.
 
+
+
+
+##################################################################
+#### Site-specific settings
+#
+# The Zimbra SOAP libraries.  Download and uncompress the Zimbra
+# source code to get them.
+use lib "/home/morgan/Docs/zimbra/zcs-5.0.2_GA_1975-src/ZimbraServer/src/perl/soap";
+# these accounts will never be added, removed or modified
+#   It's a perl regex
+my $zimbra_special = 
+    '^admin|wiki|spam\.[a-z]+|ham\.[a-z]+|'. # Zimbra supplied
+               # accounts. This will cause you trouble if you have users that 
+               # start with ham or spam  For instance: ham.let.  Unlikely 
+               # perhaps.
+    'ser|mlehmann|gab|morgan|cferet|'.  
+               # Steve, Matt, Gary, Feret and I
+    'sjones|aharris|'.        # Gary's test users
+    'hammy|spammy$';          # Spam training users 
+# run case fixing algorithm (fix_case()) on these attrs.
+#   Basically upcase after spaces and certain chars
+my @z_attrs_2_fix_case = qw/cn displayname sn givenname/;
+
+# attributes that will not be looked up in ldap when building z2l hash
+# (see sub get_z2l() for more detail)
+my @z2l_literals = qw/( )/;
+
+# max delete recurse depth -- how deep should we go before giving up
+# searching for users to delete:
+# 5 == aaaaa*
+my $max_recurse = 5;
+
+# hostname for zimbra store.  It can be any of your stores.
+# it can be overridden on the command line.
+my $default_zimbra_svr = "dmail01.domain.org";
+
+# default domain, used every time a user is created and in some cases
+# modified.  Can be overridden on the command line.
+my $default_domain       = "dev.domain.org";
+
+# default ldap settings, can be overridden on the command line
+my $default_ldap_base    = "dc=domain,dc=org";
+my $default_ldap_bind_dn = "cn=Directory Manager";
+my $default_ldap_pass    = "pass";
+# my $default_ldap_filter = 
+#     "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
+# my $default_ldap_filter = "(|(orghomeorgcd=9500)(orghomeorgcd=8020))";
+my $default_ldap_filter            = "(objectclass=posixAccount)";
+
+# zimbra admin password
+my $default_zimbra_pass  = "pass";
+
+#### End Site-specific settings
+#############################################################
+
+
+
+
 use strict;
 use Getopt::Std;
 use Net::LDAP;
 use Data::Dumper;
-
-# The Zimbra SOAP libraries.  Download and uncompress the Zimbra
-# source code to get them.
-use lib "/home/morgan/Docs/zimbra/zcs-5.0.2_GA_1975-src/ZimbraServer/src/perl/soap";
-
-#use LWP::UserAgent;
 use XmlElement;
 use XmlDoc;
 use Soap;
+$|=1;
 
 sub print_usage();
 sub get_z2l();
@@ -37,47 +91,22 @@ sub parse_and_del($);
 my $opts;
 getopts('h:D:w:b:em:ndz:', \%$opts);
 
-$|=1;
-my $ACCTNS = "urn:zimbraAdmin";
-my $MAILNS = "urn:zimbraAdmin";
-
-# these accounts will never be added, removed or modified
-#   use perl regex format.
-#
-#   This rule will cause you trouble if you have users that start with
-#   ham or spam  For instance: ham.let.  Unlikely perhaps.
-my $zimbra_special = '^admin|wiki|spam\.[a-z]+|ham\.[a-z]+|'. # Zimbra supplied
-                     'ser|mlehmann|gab|morgan|cferet|'.  
-                                               # Steve, Matt, Gary, Feret and I
-                     'sjones|aharris|'.        # Gary's test users
-                     'hammy|spammy$';          # Spam training users 
-
-# run SDP case fixing algorithm (fix_case()) on these attrs.
-#   Basically upcase after spaces and certain chars
-my @z_attrs_2_fix_case = qw/cn displayname sn givenname/;
-
-# attributes that will not be looked up in ldap when building z2l hash
-# (see sub get_z2l()
-my @z2l_literals = qw/( )/;
-
-# max delete recurse depth -- how deep should we go before giving up
-# searching for users to delete:
-# 5 == aaaaa*
-my $max_recurse = 5;
-
 my $ldap_host = $opts->{h}     || print_usage();
-my $ldap_base = $opts->{b}     || "dc=domain,dc=org";
-my $binddn =    $opts->{D}     || "cn=Directory Manager";
-my $bindpass =  $opts->{w}     || "pass";
-my $zimbra_svr = $opts->{z}     || "dmail01.domain.org";
-my $zimbra_domain = $opts->{m} || "dev.domain.org";
-my $zimbra_default_pass = $opts->{p} || "pass";
-my $fil = "(objectclass=posixAccount)";
-#my $fil = "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
-#my $fil = "(|(orghomeorgcd=9500)(orghomeorgcd=8020))";
+my $ldap_base = $opts->{b}     || $default_ldap_base;
+my $binddn =    $opts->{D}     || $default_ldap_bind_dn;
+my $bindpass =  $opts->{w}     || $default_ldap_pass;
+my $zimbra_svr = $opts->{z}    || $default_zimbra_svr;
+my $zimbra_domain = $opts->{m} || $default_domain;
+my $zimbra_pass = $opts->{p}  || $default_zimbra_pass;
 
+my $fil = $default_ldap_filter;
+
+# url for zimbra store.  It can be any of your stores
 # my $url = "https://dmail01.domain.org:7071/service/admin/soap/";
 my $url = "https://" . $zimbra_svr . ":7071/service/admin/soap/";
+
+my $ACCTNS = "urn:zimbraAdmin";
+my $MAILNS = "urn:zimbraAdmin";
 my $SOAP = $Soap::Soap12;
 
 # has ref to store a list of users added/modified to extra users can
@@ -97,7 +126,7 @@ $rslt->code && die "unable to bind as $binddn: $rslt->error";
 my $d = new XmlDoc;
 $d->start('AuthRequest', $ACCTNS);
 $d->add('name', undef, undef, "admin");
-$d->add('password', undef, undef, $zimbra_default_pass);
+$d->add('password', undef, undef, $zimbra_pass);
 $d->end();
 
 # get back an authResponse, authToken, sessionId & context.
@@ -142,7 +171,6 @@ delete_not_in_ldap();
 ### get a list of zimbra accounts, compare to ldap accounts, delete
 ### zimbra accounts no longer in in LDAP.
 
-
 $rslt = $ldap->unbind;
 
 print "finished at ", `date`;
@@ -153,7 +181,7 @@ print "finished at ", `date`;
 sub add_user($) {
     my $lu = shift;
 
-    print "***adding: ", $lu->get_value("uid"), ", ",
+    print "adding: ", $lu->get_value("uid"), ", ",
         $lu->get_value("cn"), "\n";
 
     my $z2l = get_z2l();
@@ -184,7 +212,6 @@ sub add_user($) {
 	$o =~ s/ns0\://g;
 	print $o."\n";
     }
-
 }
 
 ######
@@ -232,14 +259,14 @@ sub sync_user($$) {
 
     if ($diff_found) {
 
-	print "\n***syncing ", $lu->get_value("uid"), ", ",
+	print "\nsyncing ", $lu->get_value("uid"), ", ",
             $lu->get_value("cn"),"\n";
 
 	my $o;
 	print "changes:\n";
 	$o = $d->to_string("pretty");
 	$o =~ s/ns0\://g;
-	print $o."\n";
+	print $o;
 
 	if (!exists $opts->{n}) {
 	    my $r = $SOAP->invoke($url, $d->root(), $context);
@@ -279,8 +306,7 @@ sub print_usage() {
 }
 
 
-
-
+#######
 sub get_z2l() {
     # left  (lhs): zimbra ldap attribute
     # right (rhs): corresponding enterprise ldap attribute.
@@ -302,7 +328,8 @@ sub get_z2l() {
 	};
 }
     
-    
+
+#######
 sub get_z_user($) {
     my $u = shift;
 
@@ -440,8 +467,7 @@ sub build_target_z_value($$) {
 }
 
 
-
-
+######
 sub delete_not_in_ldap() {
     my $d = new XmlDoc;
     $d->start('SearchDirectoryRequest', $MAILNS,
@@ -471,50 +497,11 @@ sub delete_not_in_ldap() {
     print "returned ", $r->num_children, " children\n";
 
     parse_and_del($r);
-    
-#     my $children = $r->children();
-
-#     for my $child (@$children) {
-# 	my ($uid, $z_id);
-
-# 	for my $attr (@{$child->children}) {
-#   	    if ((values %{$attr->attrs()})[0] eq "uid") {
-#   		$uid = $attr->content();
-#  	    }
-#   	    if ((values %{$attr->attrs()})[0] eq "zimbraId") {
-#   		$z_id = $attr->content();
-#   	    }
-#  	}
-#  	if (defined $uid && defined $z_id && 
-# 	    !exists $all_users->{$uid} && $uid !~ $zimbra_special) {
-#  	    print "***deleting $uid, $z_id..\n";
-
-#  	    my $d = new XmlDoc;
-#  	    $d->start('DeleteAccountRequest', $MAILNS);
-#  	    $d->add('id', $MAILNS, undef, $z_id);
-#  	    $d->end();
-
-#  	    if (!exists $opts->{n}){
-# 		my $r = $SOAP->invoke($url, $d->root(), $context);
-
-# 		if (exists $opts->{d}) {
-# 		    my $o = $r->to_string("pretty");
-# 		    $o =~ s/ns0\://g;
-# 		    print $o."\n";
-# 		}
-# 	    }
-# 	}
-#     }
-
-#    print "response:\n";
-#    $o = $r->to_string("pretty");
-#    $o =~ s/ns0\://g;
-#    print $o."\n";
-    
 }
 
 
 
+#######
 # a, b, c, d .. z
 # a, aa, ab, ac .. az, ba, bb .. zz
 # a, aa, aaa, aab, aac ... zzz
@@ -538,6 +525,7 @@ sub delete_in_range($$$) {
 	$d->end;
 	
 	my $r = $SOAP->invoke($url, $d->root(), $context);
+# debugging:
 # 	if ($r->name eq "Fault" || !defined $prfx || 
 #	    scalar (split //, $prfx) < 6 ) {
  	if ($r->name eq "Fault") {
@@ -563,42 +551,6 @@ sub delete_in_range($$$) {
 
 	    parse_and_del($r);
 
-# 	    for my $child (@{$r->children()}) {
-# 		my ($uid, $z_id);
-
-# 		for my $attr (@{$child->children}) {
-# 		    if ((values %{$attr->attrs()})[0] eq "uid") {
-# 			$uid = $attr->content();
-# 		    }
-# 		    if ((values %{$attr->attrs()})[0] eq "zimbraId") {
-# 			$z_id = $attr->content();
-# 		    }
-# 		}
-# 		if (defined $uid && defined $z_id && 
-# 		    !exists $all_users->{$uid} && $uid !~ $zimbra_special) {
-# 		    print "***deleting $uid, $z_id..\n";
-
-# #         <DeleteAccountRequest xmlns="urn:zimbraAdmin">
-# #             <id>
-# #                 74c747fb-f209-475c-82c0-04fa09c5dedb
-# #             </id>
-
-# 		    my $d = new XmlDoc;
-# 		    $d->start('DeleteAccountRequest', $MAILNS);
-# 		    $d->add('id', $MAILNS, undef, $z_id);
-# 		    $d->end();
-
-# 		    if (!exists $opts->{n}){
-# 			my $r = $SOAP->invoke($url, $d->root(), $context);
-			
-# 			if (exists $opts->{d}) {
-# 			    my $o = $r->to_string("pretty");
-# 			    $o =~ s/ns0\://g;
-# 			    print $o."\n";
-# 			}
-# 		    }
-# 		}
-# 	    }
         }
     }
 }
@@ -623,6 +575,7 @@ BEGIN {
 }
 
 
+#######
 sub parse_and_del($) {
 
     my $r = shift;
@@ -642,7 +595,7 @@ sub parse_and_del($) {
  	}
  	if (defined $uid && defined $z_id && 
 	    !exists $all_users->{$uid} && $uid !~ $zimbra_special) {
- 	    print "***deleting $uid, $z_id..\n";
+ 	    print "deleting $uid, $z_id..\n";
 
  	    my $d = new XmlDoc;
  	    $d->start('DeleteAccountRequest', $MAILNS);
