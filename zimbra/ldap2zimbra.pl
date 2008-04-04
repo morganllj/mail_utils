@@ -32,6 +32,7 @@ sub fix_case($);
 sub build_target_z_value($$);
 sub delete_not_in_ldap();
 sub delete_in_range($$$);
+sub parse_and_del($);
 
 my $opts;
 getopts('h:D:w:b:em:ndz:', \%$opts);
@@ -45,13 +46,12 @@ my $MAILNS = "urn:zimbraAdmin";
 #
 #   This rule will cause you trouble if you have users that start with
 #   ham or spam  For instance: ham.let.  Unlikely perhaps.
-
-#my @zimbra_special = qw/admin wiki spam* ham* gab mlehmann/;
 my $zimbra_special = '^admin|wiki|spam\.[a-z]+|ham\.[a-z]+|'. # Zimbra supplied
                      'ser|mlehmann|gab|morgan|cferet|'.  
                                                # Steve, Matt, Gary, Feret and I
                      'sjones|aharris|'.        # Gary's test users
                      'hammy|spammy$';          # Spam training users 
+
 # run SDP case fixing algorithm (fix_case()) on these attrs.
 #   Basically upcase after spaces and certain chars
 my @z_attrs_2_fix_case = qw/cn displayname sn givenname/;
@@ -59,6 +59,11 @@ my @z_attrs_2_fix_case = qw/cn displayname sn givenname/;
 # attributes that will not be looked up in ldap when building z2l hash
 # (see sub get_z2l()
 my @z2l_literals = qw/( )/;
+
+# max delete recurse depth -- how deep should we go before giving up
+# searching for users to delete:
+# 5 == aaaaa*
+my $max_recurse = 5;
 
 my $ldap_host = $opts->{h}     || print_usage();
 my $ldap_base = $opts->{b}     || "dc=domain,dc=org";
@@ -101,18 +106,12 @@ my $authToken = $authResponse->find_child('authToken')->content;
 my $sessionId = $authResponse->find_child('sessionId')->content;
 my $context = $SOAP->zimbraContext($authToken, $sessionId);
 
-
-
-print "deleting early..\n";
-delete_not_in_ldap();
-exit 0;
-
-
-
+# search users out of ldap
 print "searching out users $fil\n";
 $rslt = $ldap->search(base => "$ldap_base", filter => $fil);
 $rslt->code && die "problem with search $fil: ".$rslt->error;
 
+# increment through users returned from ldap
 print "\nadd/modify phase..\n";
 for my $lusr ($rslt->entries) {
     my $usr = $lusr->get_value("uid");
@@ -293,8 +292,6 @@ sub get_z2l() {
     # You can use literals (like '(' or ')') but you need to identify
     # them in @z2l_literals at the top of the script.
 
-    # orgOccupationalGroup
-
     return {
 	"cn" =>                    ["cn"],
 	"displayname" =>           ["givenname", "sn", 
@@ -317,7 +314,6 @@ sub get_z_user($) {
 
     my $resp = $SOAP->invoke($url, $d->root(), $context);
 
-#    print Dumper($resp);
     my $middle_child = $resp->find_child('account');
      #my $delivery_addr_element = $resp->find_child('zimbraMailDeliveryAddress');
 
@@ -445,20 +441,90 @@ sub build_target_z_value($$) {
 
 
 
+
+sub delete_not_in_ldap() {
+    my $d = new XmlDoc;
+    $d->start('SearchDirectoryRequest', $MAILNS,
+	{'sortBy' => "uid",
+	 'attrs'  => "uid",
+	 'types'  => "accounts"}
+    ); 
+    { $d->add('query', $MAILNS, { "types" => "accounts" });} 
+    $d->end();
+
+
+    my $r = $SOAP->invoke($url, $d->root(), $context);
+
+    if ($r->name eq "Fault") {
+	# break down the search by alpha/numeric
+	print "\tFault! ..recursing deeper to return fewer results.\n";
+	delete_in_range(undef, "a", "z");
+	return;
+    }
+    
+
+    if ($r->name ne "account") {
+	print "skipping delete, unknown record type returned: ", $r->name, "\n";
+	return;
+    }
+
+    print "returned ", $r->num_children, " children\n";
+
+    parse_and_del($r);
+    
+#     my $children = $r->children();
+
+#     for my $child (@$children) {
+# 	my ($uid, $z_id);
+
+# 	for my $attr (@{$child->children}) {
+#   	    if ((values %{$attr->attrs()})[0] eq "uid") {
+#   		$uid = $attr->content();
+#  	    }
+#   	    if ((values %{$attr->attrs()})[0] eq "zimbraId") {
+#   		$z_id = $attr->content();
+#   	    }
+#  	}
+#  	if (defined $uid && defined $z_id && 
+# 	    !exists $all_users->{$uid} && $uid !~ $zimbra_special) {
+#  	    print "***deleting $uid, $z_id..\n";
+
+#  	    my $d = new XmlDoc;
+#  	    $d->start('DeleteAccountRequest', $MAILNS);
+#  	    $d->add('id', $MAILNS, undef, $z_id);
+#  	    $d->end();
+
+#  	    if (!exists $opts->{n}){
+# 		my $r = $SOAP->invoke($url, $d->root(), $context);
+
+# 		if (exists $opts->{d}) {
+# 		    my $o = $r->to_string("pretty");
+# 		    $o =~ s/ns0\://g;
+# 		    print $o."\n";
+# 		}
+# 	    }
+# 	}
+#     }
+
+#    print "response:\n";
+#    $o = $r->to_string("pretty");
+#    $o =~ s/ns0\://g;
+#    print $o."\n";
+    
+}
+
+
+
 # a, b, c, d .. z
 # a, aa, ab, ac .. az, ba, bb .. zz
 # a, aa, aaa, aab, aac ... zzz
-
-
-
-
 sub delete_in_range($$$) {
     my ($prfx, $beg, $end) = @_;
 
-    print "deleting ";
-    print "${beg}..${end}";
-    print "w/ prfx $prfx " if (defined $prfx);
-    print "\n";
+#     print "deleting ";
+#     print "${beg}..${end} ";
+#     print "w/ prfx $prfx " if (defined $prfx);
+#     print "\n";
 
     for my $l (${beg}..${end}) {
 	my $fil = 'uid=';
@@ -472,125 +538,98 @@ sub delete_in_range($$$) {
 	$d->end;
 	
 	my $r = $SOAP->invoke($url, $d->root(), $context);
- 	if ($r->name eq "Fault" || !defined $prfx || 
-	    scalar (split //, $prfx) < 2 ) {
+# 	if ($r->name eq "Fault" || !defined $prfx || 
+#	    scalar (split //, $prfx) < 6 ) {
+ 	if ($r->name eq "Fault") {
 # 	    # TODO: limit recursion depth
-	    print "Fault return.. recursing deeper to return fewer results.\n";
+	    print "\tFault! ..recursing deeper to return fewer results.\n";
 	    my $prfx2pass = $l;
 	    $prfx2pass = $prfx . $prfx2pass if defined $prfx;
- 	    delete_in_range ($prfx2pass, $beg, $end);
- 	} else {
-	    for my $child (@{$r->children()}) {
-		my ($uid, $z_id);
 
-		for my $attr (@{$child->children}) {
-		    if ((values %{$attr->attrs()})[0] eq "uid") {
-			$uid = $attr->content();
-		    }
-		    if ((values %{$attr->attrs()})[0] eq "zimbraId") {
-			$z_id = $attr->content();
-		    }
-		}
-		if (defined $uid && defined $z_id && 
-		    !exists $all_users->{$uid} && $uid !~ $zimbra_special) {
-		    print "***deleting $uid, $z_id..\n";
+	    increment_del_recurse();
+	    if (get_del_recurse() > $max_recurse) {
+		print "\tmax recursion ($max_recurse) hit, backing off..\n";
+		decrement_del_recurse();
+		return 1; #return failure so caller knows to return
+			  #and not keep trying to recurse to this
+			  #level
 
-#         <DeleteAccountRequest xmlns="urn:zimbraAdmin">
-#             <id>
-#                 74c747fb-f209-475c-82c0-04fa09c5dedb
-#             </id>
-
-		    my $d = new XmlDoc;
-		    $d->start('DeleteAccountRequest', $MAILNS);
-		    $d->add('id', $MAILNS, undef, $z_id);
-		    $d->end();
-
-		    if (!exists $opts->{n}){
-			my $r = $SOAP->invoke($url, $d->root(), $context);
-			
-			if (exists $opts->{d}) {
-			    my $o = $r->to_string("pretty");
-			    $o =~ s/ns0\://g;
-			    print $o."\n";
-			}
-		    }
-		}
 	    }
+ 	    my $rc = delete_in_range ($prfx2pass, $beg, $end);
+	    decrement_del_recurse();
+	    return if ($rc);  # should cause us to drop back one level
+			      # in recursion
+ 	} else {
+
+	    parse_and_del($r);
+
+# 	    for my $child (@{$r->children()}) {
+# 		my ($uid, $z_id);
+
+# 		for my $attr (@{$child->children}) {
+# 		    if ((values %{$attr->attrs()})[0] eq "uid") {
+# 			$uid = $attr->content();
+# 		    }
+# 		    if ((values %{$attr->attrs()})[0] eq "zimbraId") {
+# 			$z_id = $attr->content();
+# 		    }
+# 		}
+# 		if (defined $uid && defined $z_id && 
+# 		    !exists $all_users->{$uid} && $uid !~ $zimbra_special) {
+# 		    print "***deleting $uid, $z_id..\n";
+
+# #         <DeleteAccountRequest xmlns="urn:zimbraAdmin">
+# #             <id>
+# #                 74c747fb-f209-475c-82c0-04fa09c5dedb
+# #             </id>
+
+# 		    my $d = new XmlDoc;
+# 		    $d->start('DeleteAccountRequest', $MAILNS);
+# 		    $d->add('id', $MAILNS, undef, $z_id);
+# 		    $d->end();
+
+# 		    if (!exists $opts->{n}){
+# 			my $r = $SOAP->invoke($url, $d->root(), $context);
+			
+# 			if (exists $opts->{d}) {
+# 			    my $o = $r->to_string("pretty");
+# 			    $o =~ s/ns0\://g;
+# 			    print $o."\n";
+# 			}
+# 		    }
+# 		}
+# 	    }
         }
     }
 }
 
 
 
-sub delete_not_in_ldap() {
-    $d = new XmlDoc;
-    $d->start('SearchDirectoryRequest', $MAILNS,
-	{'sortBy' => "uid",
-	 'attrs'  => "uid",
-	 'types'  => "accounts"}
-    ); 
-    #{ $d->add('account', $MAILNS, { "by" => "name" }, $u);} 
-    { $d->add('query', $MAILNS, { "types" => "accounts" });} 
-    $d->end();
+# static variable to limit recursion depth
+BEGIN {
+    my $del_recurse_counter = 0;
 
+    sub increment_del_recurse() {
+	$del_recurse_counter++;
+    }
 
-    my $r = $SOAP->invoke($url, $d->root(), $context);
-
-    if ($r->name eq "Fault") {
-	# break down the search by alpha/numeric
-	
-	delete_in_range(undef, "a", "z");
-	
-# 	my ($reason, $detail);
-	
-# 	for my $c ($r->children()) {
-# 	    # print Dumper($c);
-
-# 	    for my $c2 (@$c) {
-# 		my $c3 = $c2->children();
-# 		for my $c4 (@$c3) {
-# 		    $reason = $c4->content
-# 			if ($c4->name eq "Text");
-# 		}
-# 	    }
-# 	}
-
-# 	print "fault during delete";
-
-# 	if (defined $reason) {
-# 	    print ", reason: ", $reason, "\n\n";
-# 	} else {
-# 	    print "\n";
-# 	}
-
-	return;
+    sub decrement_del_recurse() {
+	$del_recurse_counter--;
     }
     
-
-    if ($r->name ne "account") {
-	print "skipping delete, unknown record type returned: ", $r->name, "\n";
-	return;
+    sub get_del_recurse() {
+	return $del_recurse_counter;
     }
-	
+}
 
-    print "returned ", $r->num_children, " children\n";
-    
-    my $children = $r->children();
 
-#     for my $child (@$children) {
-# 	#print Dumper ($child);
-# 	for my $attr (@{$child->children}) {
-#  	    if ((values %{$attr->attrs()})[0] eq "uid") {
-#  		my $uid = $attr->content();
-# 		if (!exists $all_users->{$uid} && $uid !~ $zimbra_special) {
-# 		    print "would delete $uid..\n";
-# 		}
-#  	    }
-# 	}
+sub parse_and_del($) {
 
-#     }
+    my $r = shift;
 
-    for my $child (@$children) {
+#    my $children = $r->children();
+
+    for my $child (@{$r->children()}) {
 	my ($uid, $z_id);
 
 	for my $attr (@{$child->children}) {
@@ -611,7 +650,7 @@ sub delete_not_in_ldap() {
  	    $d->end();
 
  	    if (!exists $opts->{n}){
-		my $r = $SOAP->invoke($url, $d->root(), $context);
+#		my $r = $SOAP->invoke($url, $d->root(), $context);
 
 		if (exists $opts->{d}) {
 		    my $o = $r->to_string("pretty");
@@ -621,12 +660,6 @@ sub delete_not_in_ldap() {
 	    }
 	}
     }
-
-#    print "response:\n";
-#    $o = $r->to_string("pretty");
-#    $o =~ s/ns0\://g;
-#    print $o."\n";
-    
 }
     
 
