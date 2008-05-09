@@ -10,6 +10,11 @@
 # Zimbra.  attributes mastered by Zimbra do not go to LDAP.
 
 
+# TODO: move and generalize get_z2l()
+#       generalize build_zmailhost()
+#       correct hacks.  Search in script for "hack."
+
+
 
 
 ##################################################################
@@ -25,7 +30,8 @@ my $zimbra_special =
                # accounts. This will cause you trouble if you have users that 
                # start with ham or spam  For instance: ham.let.  Unlikely 
                # perhaps.
-    'ser|mlehmann|gab|morgan|cferet|'.  
+    'ser|'.
+#    'mlehmann|gab|morgan|cferet|'.  
                # Steve, Matt, Gary, Feret and I
     'sjones|aharris|'.        # Gary's test users
     'hammy|spammy$';          # Spam training users 
@@ -45,22 +51,24 @@ my $max_recurse = 5;
 # hostname for zimbra store.  It can be any of your stores.
 # it can be overridden on the command line.
 my $default_zimbra_svr = "dmail01.domain.org";
+# zimbra admin password
+my $default_zimbra_pass  = "pass";
 
 # default domain, used every time a user is created and in some cases
 # modified.  Can be overridden on the command line.
 my $default_domain       = "dev.domain.org";
 
 # default ldap settings, can be overridden on the command line
+my $default_ldap_host    = "ldap0.domain.org";
 my $default_ldap_base    = "dc=domain,dc=org";
 my $default_ldap_bind_dn = "cn=Directory Manager";
 my $default_ldap_pass    = "pass";
 # my $default_ldap_filter = 
 #     "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
 # my $default_ldap_filter = "(|(orghomeorgcd=9500)(orghomeorgcd=8020))";
-my $default_ldap_filter            = "(objectclass=posixAccount)";
-
-# zimbra admin password
-my $default_zimbra_pass  = "pass";
+#my $default_ldap_filter            = "(objectclass=posixAccount)";
+my $default_ldap_filter            = 
+    "(objectclass=orgZimbraPerson)";
 
 #### End Site-specific settings
 #############################################################
@@ -89,15 +97,17 @@ sub delete_in_range($$$);
 sub parse_and_del($);
 
 my $opts;
-getopts('h:D:w:b:em:ndz:', \%$opts);
+getopts('hl:D:w:b:em:ndz:s:p:', \%$opts);
 
-my $ldap_host = $opts->{h}     || print_usage();
+$opts->{h}                     && print_usage();
+my $ldap_host = $opts->{l}     || $default_ldap_host;
 my $ldap_base = $opts->{b}     || $default_ldap_base;
 my $binddn =    $opts->{D}     || $default_ldap_bind_dn;
 my $bindpass =  $opts->{w}     || $default_ldap_pass;
 my $zimbra_svr = $opts->{z}    || $default_zimbra_svr;
 my $zimbra_domain = $opts->{m} || $default_domain;
-my $zimbra_pass = $opts->{p}  || $default_zimbra_pass;
+my $zimbra_pass = $opts->{p}   || $default_zimbra_pass;
+my $subset_str = $opts->{s};
 
 my $fil = $default_ldap_filter;
 
@@ -112,6 +122,13 @@ my $SOAP = $Soap::Soap12;
 # has ref to store a list of users added/modified to extra users can
 # be deleted from zimbra.
 my $all_users;
+
+my $subset;
+if (defined $subset_str) {
+    for my $u (split /\s*,\s*/, $subset_str) {$subset->{lc $u} = 0;}
+    print "\nlimiting to subset of users:\n", join (', ', keys %$subset), "\n";
+}
+
 
 print "\nstarting at ", `date`;
 ### keep track of accounts in ldap and added.
@@ -143,7 +160,11 @@ $rslt->code && die "problem with search $fil: ".$rslt->error;
 # increment through users returned from ldap
 print "\nadd/modify phase..\n";
 for my $lusr ($rslt->entries) {
-    my $usr = $lusr->get_value("uid");
+    my $usr = lc $lusr->get_value("uid");
+
+    if (defined $subset_str) { next unless exists ($subset->{$usr}); }
+
+    print "\nworking on $usr..\n" if exists $opts->{d};
 
     $all_users->{$usr} = 1;
 
@@ -164,8 +185,12 @@ for my $lusr ($rslt->entries) {
     }
 }
 
-print "\ndelete phase..\n";
-delete_not_in_ldap();
+if (exists $opts->{e}) {
+    print "\ndelete phase..\n";
+    delete_not_in_ldap();
+} else {
+    print "\ndelete phase skipped (enable with -e)\n";
+}
 
 
 ### get a list of zimbra accounts, compare to ldap accounts, delete
@@ -181,10 +206,16 @@ print "finished at ", `date`;
 sub add_user($) {
     my $lu = shift;
 
-    print "adding: ", $lu->get_value("uid"), ", ",
+    print "\nadding: ", $lu->get_value("uid"), ", ",
         $lu->get_value("cn"), "\n";
 
     my $z2l = get_z2l();
+
+    # org hack
+    unless (defined build_target_z_value($lu, "orgghrsintemplidno")) {
+	print "\t***no orgghrsintemplidno, not adding.\n";
+	return;
+    }
 
     my $d = new XmlDoc;
     $d->start('CreateAccountRequest', $MAILNS);
@@ -230,7 +261,11 @@ sub sync_user($$) {
 	my $l_val_str = "";
 	my $z_val_str = "";
 
-	$z_val_str = join (' ', sort @{$zu->{$zattr}});
+	if (!exists $zu->{$zattr}) {
+	    $z_val_str = "";
+	} else {
+	    $z_val_str = join (' ', sort @{$zu->{$zattr}});
+	}
 
 	# build the values from ldap using zimbra capitalization
 	$l_val_str = build_target_z_value($lu, $zattr);
@@ -244,10 +279,19 @@ sub sync_user($$) {
 
 	if ($l_val_str ne $z_val_str) {
 	    if (exists $opts->{d}) {
-		print "difference values for $zattr:\n".
+		print "different values for $zattr:\n".
 		    "\tldap:   $l_val_str\n".
 		    "\tzimbra: $z_val_str\n";
 	    }
+
+	    # org hack!
+	    if ($zattr =~ /^\s*zimbramailhost\s*$/) {
+		print "zimbraMailHost difference found! Skipping:\n".
+		    "\tldap:   $l_val_str\n".
+		    "\tzimbra: $z_val_str\n";
+		next;
+	    }
+
 
 	    # if the values differ push the ldap version into Zimbra
 	    $d->add('a', $MAILNS, {"n" => $zattr}, $l_val_str);
@@ -286,20 +330,30 @@ sub sync_user($$) {
 ######
 sub print_usage() {
     print "\n";
-    print "usage: $0 [-n] [-d] [-e] -h <ldap host> [-b <basedn>]\n";
-    print "\t[-D <binddn>] [-w <bindpass>] [-d <Zimbra domain>]\n";
-    print "\t[-p <default pass>] [-z zimbra host]\n";
+    print "usage: $0 [-n] [-d] [-e] [-h] -l <ldap host> -b <basedn>\n".
+	"\t-D <binddn> -w <bindpass> -m <zimbra domain> -z zimbra host\n".
+	"\t[-s \"user1,user2, .. usern\"] -p <zimbra admin user pass>\n";
     print "\n";
-    print "\toptions in [] are optional\n";
-    print "\t-d debug\n";
+    print "\toptions in [] are optional, but all can have defaults\n".
+	"\t(see script to set defaults)\n";
     print "\t-n print, don't make changes\n";
+    print "\t-d debug\n";
+    print "\t-e exhaustive search.  Search out all Zimbra users and delete\n".
+	"\t\tany that are not in your enterprise ldap.  Steps have been \n".
+	"\t\tto make this scale arbitrarily high.  It's been tested on \n".
+	"\t\ttens of thousands successfully.\n";
+    print "\t-h this usage\n";
     print "\t-D <binddn> Must have unlimited sizelimit, lookthroughlimit\n".
 	"\t\tnearly Directory Manager privilege to view users.\n";
-    print "\t-e exhaustive search.  Search out all Zimbra users and delete\n".
-	"\tany that are not in your enterprise ldap.  This is probably safe\n".
-	"\tunless you have more than tens of thousands of users.\n";
+    print "\t-s \"user1, user2, .. usern\" provision a subset, useful for\n".
+	"\t\tbuilding dev environments out of your production ldap or\n".
+	"\t\tfixing a few users without going through all users\n".
+	"\t\tIf you specify -e as well all other users will be deleted\n";
     print "\n";
-    print "example: $0 -h ldap.domain.com -b dc=domain,dc=com -w pass\n";
+    print "example: ".
+	"$0 -l ldap.morganjones.org -b dc=morganjones,dc=org \\\n".
+	"\t\t-D cn=directory\ manager -w pass -z zimbra.morganjones.org \\\n".
+        "\t\t-m morganjones.org\n";
     print "\n";
 
     exit 0;
@@ -320,14 +374,41 @@ sub get_z2l() {
 
     return {
 	"cn" =>                    ["cn"],
+#	"zimbrapreffromdisplay" => ["cn"],
+        "givenname" =>             ["givenname"],
+	"sn" =>                    ["sn"],
 	"displayname" =>           ["givenname", "sn", 
 				    "(", "orgoccupationalgroup", ")"],
-#	"zimbrapreffromdisplay" => ["cn"],
-	"sn" =>                    ["sn"],
-        "givenname" =>             ["givenname"]
-	};
+	"zimbramailhost" =>        ["placeholder.."], # fix this, also hacked in
+	                                              # build_target_z_value()
+        "zimbramailcanonicaladdress" => ["placeholder.."]  # fix this too. 
+    };
+
+# A15 ULC-SHORT-NAME          /TELECOM & NTWRK/
+#  Telecom & Ntwrk
 }
     
+
+sub build_zmailhost($) {
+    my $org_id = shift;
+
+    my @i = split //, $org_id;
+
+    my $n = pop @i;
+
+    if ($n =~ /^[01]{1}$/) {
+	return "mail01.domain.org";
+    } elsif ($n =~ /^[23]{1}$/) {
+	return "mail02.domain.org";
+    } elsif ($n =~ /^[45]{1}$/) {
+	return "mail03.domain.org";
+    } elsif ($n =~ /^[67]{1}$/) {
+	return "mail04.domain.org";
+    } elsif ($n =~ /^[89]{1}$/) {
+	return "mail05.domain.org";
+    }
+}
+
 
 #######
 sub get_z_user($) {
@@ -436,16 +517,24 @@ sub build_target_z_value($$) {
     my ($lu, $zattr) = @_;
     
     my $z2l = get_z2l();
+
+    # hacks to get through a deadline
+    return build_zmailhost($lu->get_value("orgghrsintemplidno"))
+	if ($zattr eq "zimbramailhost");
+
+    return $lu->get_value("uid") . "\@domain.org"
+	if ($zattr eq "zimbramailcanonicaladdress");
     
     my $ret = join ' ', (
 	map {
     	    my @ldap_v;
 	    my $v = $_;
-	    
+
 	    map {
 		if ($v eq $_) {
-		   $ldap_v[0] = $v;
-		}} @z2l_literals;
+		    $ldap_v[0] = $v;
+		}
+	    } @z2l_literals;
 
 	    if ($#ldap_v < 0) {
 		@ldap_v = $lu->get_value($v);
@@ -454,7 +543,7 @@ sub build_target_z_value($$) {
 		@ldap_v;
 	    }
 
-	} @{$z2l->{$zattr}}
+	} @{$z2l->{$zattr}}   # get the ldap side of z2l hash
     );
 
     # special case rule to remove space before after open parentheses
@@ -462,6 +551,8 @@ sub build_target_z_value($$) {
     # way/place to do this.
     $ret =~ s/\(\s+/\(/;
     $ret =~ s/\s+\)/\)/;
+    # if just () remove.. another hack for now.
+    $ret =~ s/\s*\(\)\s*//g;
 
     return $ret;
 }
@@ -502,7 +593,7 @@ sub delete_not_in_ldap() {
 
 
 #######
-# a, b, c, d .. z
+# a, b, c, d, .. z
 # a, aa, ab, ac .. az, ba, bb .. zz
 # a, aa, aaa, aab, aac ... zzz
 sub delete_in_range($$$) {
