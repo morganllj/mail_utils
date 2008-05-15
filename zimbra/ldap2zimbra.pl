@@ -374,7 +374,7 @@ sub get_z2l() {
 
     return {
 	"cn" =>                    ["cn"],
-#	"zimbrapreffromdisplay" => ["cn"],
+	"zimbrapreffromdisplay" => ["givenname", "sn"],
         "givenname" =>             ["givenname"],
 	"sn" =>                    ["sn"],
 	"displayname" =>           ["givenname", "sn", 
