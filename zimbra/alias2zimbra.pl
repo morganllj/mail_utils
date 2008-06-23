@@ -4,7 +4,7 @@
 # Author: Morgan Jones (morgan@morganjones.org)
 # Id:     $Id$
 #
-# A generalized sendmail-style alias file to ldap sync tool
+# A generalized sendmail-style alias file to Zimbra sync tool
 #
 
 use strict;
@@ -17,23 +17,14 @@ use XmlElement;
 use XmlDoc;
 use Soap;
 
-# my $basedn = "dc=domain,dc=org";
-# my $binddn = "cn=directory manager";
-# my $bindpw = "pass";
-# my $ldaphost = "comms.demo.domain.org";
-# my $ldapport = 1389;
-
 # sub protos
 sub print_usage();
 sub sendmail_into_elements($$$);
 sub sync_alias($$$$$);
-#sub find_in_ldap($$);
 sub update_in_ldap($$$);
-#sub alias_type($);
 sub merge_into_zimbra($$);
-#sub remove_alias($$);
 sub add_alias($$);
-#sub create_ldap_update($$$);
+sub lists_differ($$);
 
 
 my $opts;
@@ -65,43 +56,11 @@ my $sessionId = $authResponse->find_child('sessionId')->content;
 my $context = $SOAP->zimbraContext($authToken, $sessionId);
 
 
-# How I decide if the alias is in LDAP: (should be schema independent)
-#   search for each of @user_alias_attrs  as <attr_name>=<alias_name>@*
-#   search for each of @group_alias_attrs as <attr_name>=<alias_name>
-#
-# How I decide what to delete:
-#   Delete the entry if it contains one of @delete_entry_indicators
-#   Delete the attribute from the entry if it contains
-#       @user_alias_attrs or @group_alias_attrs that are not in
-#       @delete_entry_indicators
-#
-# Delete Exception:
-#   @identify_as_user: if an alias (lhs) is the same as a user, don't
-#       delete the user instead:
-#          - if the rhs contains \<user> add a forward
-#          - otherwise complain but make no changes.
-#
-# my @user_alias_attrs = qw/mailAlternateAddress mailEquivalentAddress mail/;
-# my @group_alias_attrs = qw/cn/;
-
-# my @identify_as_user = qw/inetMailUser/;
-# my @identify_as_group = qw/inetMailGroup/;
-
-# my @delete_entry_indicators = qw/cn mail/;
-
-# my $user_naming_attr = qw/uid/;
-
-
 # our environment only does program delivery for delivery to majordomo lists.
 #   we forward all aliases that do program delivery to an external host.
 my $list_mgmt_host = qw/lists.domain.org/;
 
-
-# my $group_member_attribute = qw/rfc822MailMember/;
-# my $user_member_attribute = $user_alias_attrs[0];
-# my $user_forward_attribute = qw/mailForwardingAddress/;
-
-# hold a list of alias files
+# list of alias files
 my @alias_files;
 
 if ($alias_files =~ /\,/) { 
@@ -129,10 +88,6 @@ for my $af (@alias_files) {
  	}
     }
 }
-
-
-
-
 
 
 
@@ -183,53 +138,112 @@ sub alias_into_elements($$$) {
 }
 
 
-sub sync_single($$) {
+sub sync_alias($$) {
     my ($l, $r) = @_;
     # try to find a user in zimbra matching $r
 
+    my $d = new XmlDoc;
+
+    my @z = get_z_aliases();
+    my @t = split /\s*,\s*/, $r;
+    
+    if (lists_differ(\@z, \@t) ) {
+	update_z_alias($l, @t);
+    }
+}
+
+
+sub update_z_alias(@) {
+    my $l = shift;
+    my @contents = @_;
+    
+    print "updating zimbra list $l: ", join(', ', @l), "\n";
+}
+
+
+sub lists_differ {
+    my ($l1, $l2) = @_;
+
+    my @l1 = sort @$l1;
+    my @l2 = sort @$l2;
+
+    return 1 if ($#l1 != $#l2);
+
+    my $i = 0;
+    for (@l1) {
+	return 1 if ($l1[$i] ne $l2[$i]);
+    }
+    return 0;
+}
+
+
+
+sub get_z_alias () {
+    my ($name, $types) = @_;
+
+    $types = "aliases,distributionLists"
+	if (!defined $types);
+
+    # search for a distribution list
+    $d->start('SearchDirectoryRequest', $MAILNS);
+    $d->add('query', $MAILNS, {"types" => $types},
+	    "(|(uid=*$l*)(cn=*$l*)(sn=*$l*)(gn=*$l*)(displayName=*$l*)(zimbraId=$l)(mail=*$l*)(zimbraMailAlias=*$l*)(zimbraMailDeliveryAddress=*$l*)(zimbraDomainName=*$l*))");
+    $d->end;
+
+    my $r = SOAP->invoke($url, $d->root(), $context);
+    if ($r->name eq "Fault") {
+	print "Fault while getting zimbra alias:\n";
+	return;
+    }
+
+    print Dump (@r);
+
+ #     for my $child (@{$r->children}) {
+	
+#     }
     
 }
 
-sub sync_multiple($$) {
-    my ($l, $r) = @_;
-    
-    # build a Zimbra distribution list
-    
-    
-}
 
-sub sync_included($$) {
-    my ($l, $r) = @_;
-
-    # open included file
-    my @a = get_addresses($r);
-    # build a Zimbra distribution list with the contents
-
-}
-
-sub sync_executable($$) {
-    my ($l, $r) = @_;
-
-    # break up $r
+# sub sync_multiple($$) {
+#     my ($l, $r) = @_;
     
-    # build a Zimbra distribution list forwarding to $list_mgmt_host
+#     # build a Zimbra distribution list
     
     
-    
+# }
 
-}
 
-# TODO: executable + included?
-sub sync_executble_plus_include($$) {
-    my ($l, $r) = @_;
-    
-    # create one Zimbra distribution list:
-    #     forward to $list_mgmt_host
-    
-    #     and build list from included file
-    my @a = get_addresses($r);
 
-}
+# sub included_into_z($$) {
+#     my ($l, $r) = @_;
+
+#     # open included file
+#     my @a = get_addresses($r);
+#     # build a Zimbra distribution list with the contents
+
+# }
+
+# sub executable_into_z($$) {
+#     my ($l, $r) = @_;
+
+#     # break up $r
+    
+#     # build a Zimbra distribution list forwarding to $list_mgmt_host
+
+# }
+
+# # TODO: executable + included?
+# sub executable_plus_include_into_z($$) {
+#     my ($l, $r) = @_;
+    
+#     # create one Zimbra distribution list:
+#     #     forward to $list_mgmt_host
+    
+#     #     and build list from included file
+#     my @a = get_addresses($r);
+
+# }
 
 
 ######
@@ -288,12 +302,13 @@ sub merge_into_zimbra ($$) {
  
     if    ($$r =~ /^\s*[$sa]+\s*$/) {
 	print "single alias..\n";
-	sync_single($$l, $$r);
+        alias_into_z($$l, $$r);
     } elsif ($$r =~ /^\s*\/dev\/null\s*$/) {
 	print "dev null alias..\n";
 
     } elsif ($$r =~ /^\s*[$sa$ma]+\s*$/) {
 	print "multiple alias..\n";
+	alias_into_z($$l, $$r);
 
     } elsif ($$r =~ /^\s*${ia}[$sa$ea]+\s*$/) {
 	print "included alias..\n";
@@ -303,7 +318,6 @@ sub merge_into_zimbra ($$) {
 
     } elsif ($$r =~ /^\s*${ia}${ea}|${ea}${ia}\s*$/) {
 	print "executable and included alias..\n";
-
     } else {
 	print "can't categorize this alias..\n";
     }
@@ -330,184 +344,6 @@ sub merge_into_zimbra ($$) {
 
 }
 
-
-
-# $into_data_store_func merge_into_ldap
-#   Merge an alias broken into left and right parts into ldap.
-# sub merge_into_ldap ($$) {
-#     my ($l, $r) = @_;
-
-#     $opts->{d} && print "\nworking on /$$l/ /$$r/\n";
-
-#     return "left hand side of alias failed sanity check"
-# 	if ( $$l !~ /^\s*[a-zA-Z0-9\-_\.]+\s*$/);
-
-#     return "right hand side of alias failed sanity check."
-#         if (# examples to justify certain characters included in regex:
-# 	    #
-# 	    # char     example
-# 	    # \/       alias_to_nowhere: /dev/null
-# 	    # \\       olduser: \olduser,currentuser1,currentuser2
-# 	    # :        alias   : :include:/path/to/textfile
-# 	    # |        alias: "|/path/to/executable"
-# 	    # \"       alias: "|/path/to/executable"
-# 	    # \s       alias: user1, user2
-# 	    #
-# 	    $$r !~ /^\s*[a-zA-Z0-9\-_\,\@\.\/\\:|\"\s]+\s*$/ );
-
-#     my $ldap_rslt;
-#     my $fil_result = find_in_ldap($l, \$ldap_rslt);
-#     return $fil_result if $fil_result;
-
-#     $opts->{d} && print $ldap_rslt->count ." entries returned from ldap\n";
-
-# #    my $clu_result = create_ldap_update ($l, $r, $ldap_rslt);
-#     return $clu_result if $clu_result;
-
-# #    add_alias($l, $r) unless remove_alias($l, $ldp_rslt);
-
-#     return 0;
-
-# }
-
-
-# sub create_ldap_update($$$) {
-#     my ($l, $r, $ldp_rslt) = @_;
-
-#     my $type;   # user, group, include or prog_delivery
-# #    my $alias = $$l;  # never changes, always lhs from the alias
-#     #my $aliasfile_entries; # entries as we would add them to ldap.
-
-#     # contains alias attributes from file
-#     my $alias_in_file;
-
-
-
-#     my $_type;
-#     my $_member_attr;
-#     my $_attrs
-    
-#     if ($$r =~ /^\s*[a-zA-Z0-9_\-_\.\\]+$/) {
-# 	# one local user
-# 	#$aliasfile_entries->{$user_member_attribute} = [ ($$r) ];
-# 	$_type =        qw/user/;
-# 	$_attrs =       [ ($$r) ];
-# 	$_member_attr = $user_member_attribute;
-
-#     } elsif ($$r =~ /^\s*[a-zA-Z0-9_\-\.\@\s\,\\]+$/) {
-# 	# one or more non-local address or multiple addresses.
-# 	# could be a straight alias to multiple addresses
-# 	# a store locally and forward (bob: \bob, bob@remote.com).
-# 	my @r = split /\,/, $$r;
-# 	if (grep /\\$$l/i, @r) {
-# # 	    $type = qw/store_forward/;
-# # 	    $aliasfile_entries->{$group_member_attribute} = [ grep !/\\$$l/i, @r ];
-# 	    $_type =        qw/store_forward/;
-# 	    $_attrs =       [ grep !/\\$$l/i, @r ];
-# 	    $_member_attr = $user_member_attribute;
-# 	} else {
-# # 	    $type = qw/group/;
-# # 	    $aliasfile_entries->{$group_member_attribute} = [ split /\s*,\s*/, $$r ];
-# 	    $_type =        qw/group/;
-# 	    $_attrs =       [ split /\s*,\s*/, $$r ];
-# 	    $_member_attr = $user_member_attribute;
-# 	}
-#     } elsif ($$r =~ /:\s*include\s*:/ &&
-# 	     $$r =~ /^\s*[a-zA-Z0-9_\-\.\@\s\,\\\/:]+$/) {
-# 	# included file
-# # 	$type = qw/include/;
-#  	$opts->{d} && print "included file: $$l: $$r\n";
-# 	$_type =        qw/include/;
-# 	$_attrs =       $list_mgmt_host;
-# 	$_member_attr = $user_forward_attribute;
-
-#     } elsif ($$r =~ /^\s*\"\|[a-zA-Z0-9_\-\.\@\s\,\\\/:\"]+$/) {
-# 	#$type = qw/prog_delivery/;
-#         # deliver to a program
-# 	$opts->{d} && print "deliver to a program: $$l: $$r\n";
-
-# 	$_type =        qw/prog_delivery/;
-# 	$_attrs =       $list_mgmt_host;
-# 	$_member_attr = $user_forward_attribute;
-#     } else {
-# 	$opts->{d} && print "yet to be dealt with alias format: $$l: $$r\n";
-# 	return;
-#     }
-
-
-# 	$alias_in_file->{type} =        $_type;
-# 	$alias_in_file->{member_attr} = $_member_attr; 
-# 	$alias_in_file->{attrs} =       $_attrs
-
-
-# #    my $at_return = alias_type($l, $r, \$type);
-# #    return $at_return if ($at_return);
-
-#     $opts->{d} && print "alias type: $type\n";
-#     if ($aliasfile_entries && $opts->{d}) {
-# 	for (keys %$aliasfile_entries) {
-# 	    print "(aliasfile) $_: ", join " ", @{$aliasfile_entries->{$_}}, "\n";;
-# 	}
-#     }
-
-
-#     for (my $i=0; $i < $ldp_rslt->count; $i++) {
-# 	my $le = $ldp_rslt->entry($i);
-
-# 	print "objectclasses: ", join " ", $le->get_value("objectclass"), "\n";
-
-# 	if (map {grep /$_/i, $le->get_value("objectclass")} @identify_as_user) {
-# 	    $opts->{d} && print "ldap entry is a user\n";
-# 	    if ($type eq "user") {
-# 		# we don't want to delete a user to add an alias.
-# 		return "alias conflicts with user already in ldap.";
-# 	    } elsif ($type eq "store_forward") {
-# 		$opts->{d} && print "add ", join " ", @{$aliasfile_entries->{$_}}, 
-# 		" to ", $le->get_value($user_naming_attr), "\n";
-# 		return "unknown type $type caught at $.";
-# 	    } elsif ($type eq "group") {
-
-# 	    } elsif ($type eq "prog_delivery") {
-# 		$opts->{d} && print "forward to $$l\@", 
-# 	    } else {
-# 		return "unknown type $type caught at $.";
-# 	    }		
-# 	} elsif (map {grep /$_/i, $le->get_value("objectclass")} @identify_as_group) {
-# 	    $opts->{d} && print "ldap entry is a group\n";
-# 	} else {
-# 	    return "unable to id as user or group,".
-# 		"\n\t\tcheck \@identify_as_user and \@identify_as_group values.".
-# 		"\n\t\tdn: ".$le->dn;
-# 	}
-	
-#     }
-
-# }
-
-
-# sub remove_alias ($$) {
-#     my ($l, $ldp_rslt) = @_;
-
-#     return 0 unless $ldp_rslt->count;
-
-# #    remove_attr($ldp_rslt, @user_alias_attrs);
-# #    remove_entry_containing_attrs($ldap_rslt, @group_alias_attrs);
-
-
-#     for my $entry ($ldp_rslt->entries) {
-# 	# Delete the attribute if the alias is in a 
-#         #    @user_alias_attr or @group_alias_attr
-# 	# Delete the entry if the alias is in a @delete_entry_indicator
-
-# 	print $entry->dn . "\n";
-# 	print "delete entry:..\n";
-# 	print "\t" . join "\n\t",  map {$entry->get_value($_)} @delete_entry_indicators;
-
-# 	print "\n" . "delete attrs:\n";
-# 	print "\t" . join "\n\t",  map {$entry->get_value($_)} @user_alias_attrs, @group_alias_attrs;
-#     }
-
-# }
 
 
 sub add_alias($$) {
@@ -558,42 +394,6 @@ sub add_alias($$) {
 # }
 
 
-# sub find_in_ldap($$) {
-#     my ($l, $rslt) = @_;
-    
-#     # search ldap for the alias.  
-#     #  It will either be 
-#     #    - a user, 
-#     #    - an alias to a user (mailequivalentaddress or mailalternateaddress) or
-#     #    - a group.
-#     #
-    
-#     my $local_user = $$l;
-#     $local_user =~ s/^\s*\\//;
-
-#     my $ldap = Net::LDAP->new($ldaphost, port => $ldapport);
-#     $ldap->bind($binddn, password => $bindpw);
-
-#     # determine if the alias already exists in ldap
-# #     my $filter = "(|(mailalternateaddress=$local_user\@*)".
-# # 	"(mailequivalentaddress=$local_user\@*)(mail=$local_user\@*)".
-# # 	"(cn=$local_user))";
-#     my $filter = "(|" . join ("" , map {"(" . $_ . "=$local_user\@*)"} 
-# 			      @user_alias_attrs) .
-# 			join ("" , map {"(" . $_ . "=$local_user)"} 
-# 			      @group_alias_attrs) . ")";
-#     $opts->{d} && print "filter: /$filter/\n";
-#     $$rslt = $ldap->search(
-#         base => $basedn, 
-#         filter => $filter,
-#         attrs  => ["objectclass", "mailalternateaddress", "mailequivalentaddress",
-#  	          "mail"]);
-#     $$rslt->code && return "LDAP: ".$rslt->error;
-
-#     return 0;
-# }
-
-
 
 
 
@@ -625,7 +425,7 @@ sub add_alias($$) {
 
 
 
-# find an alias:
+# search out all aliases:
 # <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
 #     <soap:Header>
 #         <context xmlns="urn:zimbra">
@@ -637,9 +437,54 @@ sub add_alias($$) {
 #             <format type="js"/>
 #         </context>
 #     </soap:Header>
-#     <soap:Body>
+#     <soap:Body>n
 #         <SearchDirectoryRequest xmlns="urn:zimbraAdmin" offset="0" limit="25" sortBy="name" sortAscending="1" attrs="displayName,zimbraId,zimbraMailHost,uid,zimbraAccountStatus,description,zimbraMailStatus,zimbraCalResType,zimbraDomainType,zimbraDomainName" types="aliases">
 #             <query/>
+#         </SearchDirectoryRequest>
+#     </soap:Body>
+# </soap:Envelope>
+
+
+
+# find an alias
+# <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+#     <soap:Header>
+#         <context xmlns="urn:zimbra">
+#             <userAgent name="ZimbraWebClient - FF2.0 (Linux)"/>
+#             <sessionId id="33282"/>
+#             <format type="js"/>
+#             <authToken>
+#                 0_bedba0ac9ca0f700dc84fea3c1647757717ebba7_69643d33363a38323539616631392d313031302d343366392d613338382d6439393038363234393862623b6578703d31333a313230373338353334383532363b61646d696e3d313a313b747970653d363a7a696d6272613b6d61696c686f73743d31363a3137302e3233352e312e3234313a38303b
+#             </authToken>
+#         </context>
+#     </soap:Header>
+#     <soap:Body>
+#         <SearchDirectoryRequest xmlns="urn:zimbraAdmin" offset="0" limit="25" sortBy="name" sortAscending="1" attrs="displayName,zimbraId,zimbraMailHost,uid,zimbraAccountStatus,zimbraLastLogonTimestamp,description,zimbraMailStatus,zimbraCalResType,zimbraDomainType,zimbraDomainName" types="aliases">
+#             <query>
+#                 (|(uid=*morgan*)(cn=*morgan*)(sn=*morgan*)(gn=*morgan*)(displayName=*morgan*)(zimbraId=morgan)(mail=*morgan*)(zimbraMailAlias=*morgan*)(zimbraMailDeliveryAddress=*morgan*)(zimbraDomainName=*morgan*))
+#             </query>
+#         </SearchDirectoryRequest>
+#     </soap:Body>
+# </soap:Envelope>
+
+
+# find a distribution list
+# <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+#     <soap:Header>
+#         <context xmlns="urn:zimbra">
+#             <userAgent name="ZimbraWebClient - FF2.0 (Linux)"/>
+#             <sessionId id="33326"/>
+#             <format type="js"/>
+#             <authToken>
+#                 0_bedba0ac9ca0f700dc84fea3c1647757717ebba7_69643d33363a38323539616631392d313031302d343366392d613338382d6439393038363234393862623b6578703d31333a313230373338353334383532363b61646d696e3d313a313b747970653d363a7a696d6272613b6d61696c686f73743d31363a3137302e3233352e312e3234313a38303b
+#             </authToken>
+#         </context>
+#     </soap:Header>
+#     <soap:Body>
+#         <SearchDirectoryRequest xmlns="urn:zimbraAdmin" offset="0" limit="25" sortBy="name" sortAscending="1" attrs="displayName,zimbraId,zimbraMailHost,uid,zimbraAccountStatus,zimbraLastLogonTimestamp,description,zimbraMailStatus,zimbraCalResType,zimbraDomainType,zimbraDomainName" types="distributionlists">
+#             <query>
+#                 (|(uid=*morgan*)(cn=*morgan*)(sn=*morgan*)(gn=*morgan*)(displayName=*morgan*)(zimbraId=morgan)(mail=*morgan*)(zimbraMailAlias=*morgan*)(zimbraMailDeliveryAddress=*morgan*)(zimbraDomainName=*morgan*))
+#             </query>
 #         </SearchDirectoryRequest>
 #     </soap:Body>
 # </soap:Envelope>
