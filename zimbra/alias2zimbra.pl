@@ -138,13 +138,13 @@ sub alias_into_elements($$$) {
 }
 
 
-sub sync_alias($$) {
+sub alias_into_z($$) {
     my ($l, $r) = @_;
     # try to find a user in zimbra matching $r
 
     my $d = new XmlDoc;
 
-    my @z = get_z_aliases();
+    my @z = get_z_alias();
     my @t = split /\s*,\s*/, $r;
     
     if (lists_differ(\@z, \@t) ) {
@@ -157,11 +157,11 @@ sub update_z_alias(@) {
     my $l = shift;
     my @contents = @_;
     
-    print "updating zimbra list $l: ", join(', ', @l), "\n";
+    print "updating zimbra list $l: ", join(', ', @contents), "\n";
 }
 
 
-sub lists_differ {
+sub lists_differ ($$) {
     my ($l1, $l2) = @_;
 
     my @l1 = sort @$l1;
@@ -187,7 +187,7 @@ sub get_z_alias () {
     # search for a distribution list
     $d->start('SearchDirectoryRequest', $MAILNS);
     $d->add('query', $MAILNS, {"types" => $types},
-	    "(|(uid=*$l*)(cn=*$l*)(sn=*$l*)(gn=*$l*)(displayName=*$l*)(zimbraId=$l)(mail=*$l*)(zimbraMailAlias=*$l*)(zimbraMailDeliveryAddress=*$l*)(zimbraDomainName=*$l*))");
+	    "(|(uid=*$name*)(cn=*$name*)(sn=*$name*)(gn=*$name*)(displayName=*$name*)(zimbraId=$name)(mail=*$name*)(zimbraMailAlias=*$name*)(zimbraMailDeliveryAddress=*$name*)(zimbraDomainName=*$name*))");
     $d->end;
 
     my $r = SOAP->invoke($url, $d->root(), $context);
@@ -196,7 +196,7 @@ sub get_z_alias () {
 	return;
     }
 
-    print Dump (@r);
+    print Dump ($r);
 
  #     for my $child (@{$r->children}) {
 	
