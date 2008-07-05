@@ -9,6 +9,7 @@
 
 use strict;
 use Getopt::Std;
+use Data::Dumper;
 #use Net::LDAP;
 # The Zimbra SOAP libraries.  Download and uncompress the Zimbra
 # source code to get them.
@@ -16,6 +17,7 @@ use lib "/home/morgan/Docs/zimbra/zcs-5.0.2_GA_1975-src/ZimbraServer/src/perl/so
 use XmlElement;
 use XmlDoc;
 use Soap;
+use Net::LDAP;
 
 # sub protos
 sub print_usage();
@@ -24,7 +26,9 @@ sub sync_alias($$$$$);
 sub update_in_ldap($$$);
 sub merge_into_zimbra($$);
 sub add_alias($$);
+sub update_z_list($@);
 sub lists_differ($$);
+sub add_z_list($$@);
 
 
 my $opts;
@@ -36,6 +40,12 @@ my $zimbra_pass = $opts->{p} || "pass";
 my $zimbra_svr  = $opts->{z} || "dmail01.domain.org";
 
 $|=1;
+
+my $default_domain = "dev.domain.org";
+
+
+################
+# Zimbra SOAP
 my $ACCTNS = "urn:zimbraAdmin";
 my $MAILNS = "urn:zimbraAdmin";
 
@@ -56,6 +66,19 @@ my $sessionId = $authResponse->find_child('sessionId')->content;
 my $context = $SOAP->zimbraContext($authToken, $sessionId);
 
 
+################
+# Zimbra LDAP
+my $z_ldap_host = "dmldap01.domain.org";
+my $z_ldap_base = "dc=dev,dc=domain,dc=org";
+my $z_ldap_binddn = "cn=config";
+my $z_ldap_pass = "pass";
+
+my $ldap = Net::LDAP->new($z_ldap_host) or die "$@";
+$ldap->bind(dn=>$z_ldap_binddn, password=>$z_ldap_pass);
+
+
+
+
 # our environment only does program delivery for delivery to majordomo lists.
 #   we forward all aliases that do program delivery to an external host.
 my $list_mgmt_host = qw/lists.domain.org/;
@@ -72,7 +95,7 @@ if ($alias_files =~ /\,/) {
 # loop over the list of alias files, open and process each
 for my $af (@alias_files) {
     my $aliases_in;
-    open ($aliases_in, $af) || die "can't open /$af/";
+    open ($aliases_in, $af) || die "can't open alias file: $af";
 
     while (<$aliases_in>) {
 	chomp;
@@ -138,26 +161,198 @@ sub alias_into_elements($$$) {
 }
 
 
+
 sub alias_into_z($$) {
     my ($l, $r) = @_;
     # try to find a user in zimbra matching $r
 
-    my $d = new XmlDoc;
-
-    my @z = get_z_alias();
+    my ($type, @z) = get_z_alias($l);
     my @t = split /\s*,\s*/, $r;
+
+    for (@t) {
+	s/^([^\@]+)$/$1\@$default_domain/;
+    }
     
     if (lists_differ(\@z, \@t) ) {
-	update_z_alias($l, @t);
+	update_z_list($type, $l, @t);
+    } else {
+	print "lists are the same, moving on..\n";
     }
 }
 
 
-sub update_z_alias(@) {
+
+#### sub update_z_list
+# we know the recipient list is different
+# we need to decide (based on $type) if 
+#    we delete the list in Zimbra (if it exists but is the wrong type) and
+#    we sync an existing list (if it exists and is the right type) or
+#    add a new list (if it it's not there or we needed to delete it)
+sub update_z_list($@) {
+    my $existing_type = shift;
     my $l = shift;
     my @contents = @_;
     
-    print "updating zimbra list $l: ", join(', ', @contents), "\n";
+    # if rhs is one value and it's either unqualified or @default_domain
+    #    search for a user of the same name
+    # if a user is found add it as an alias
+    # otherwise add a dist_list and qualify it with @default_domain
+
+
+    # I wonder if we need to qualify addresses after the check to see
+    # if their valid users.  really it may not matter as sendmail aliases
+    # currently don't check for valid users anyway.
+    for (@contents) {
+	# add the default domain if the account is unqualified
+	$_ .= "\@" . $default_domain
+	    if ($_ !~ /\@/);
+    }
+
+
+    my $mail;
+    if ($#contents == 0) {
+
+	my $m = $contents[0];
+
+# I'm not sure if there's a point in looking up the user in ldap.
+# 	print "checking for user matching $m..\n";
+
+# 	my $d = new XmlDoc;
+# 	$d->start('GetAccountRequest', $MAILNS);
+# 	$d->add('account', $MAILNS, { "by" => "name" }, $m);
+# 	$d->end();
+	
+# 	my $resp = $SOAP->invoke($url, $d->root(), $context);
+# 	my $middle_child = $resp->find_child('account');
+# 	if (defined $middle_child) {
+# 	    # don't do this uniless there is something there..
+
+# 	    for my $child (@{$middle_child->children()}) {
+# 		$mail = $child->content()
+# 		    if (lc ((values %{$child->attrs()})[0]) eq "mail");
+# 	    }
+# 	}
+
+
+    }
+    
+
+    # should we pass the type here since we're determining it anyway?
+    if (defined $mail) {
+	# add an alias
+	delete_z_list($l, $existing_type)
+	    if ($existing_type ne "alias");
+	add_z_list("alias", $l, @contents);
+    } elsif ( $#contents > -1) {
+	# add a dist list
+	delete_z_list($l, $existing_type);
+	add_z_list("distributionlist", $l, @contents)
+	    if ($existing_type ne "dist_list");
+    } else { # $#contents < 0
+	# There's a list in the alias file that has no valid
+	# recipients, delete it.
+	delete_z_list($l, $existing_type);
+    }
+
+}
+
+
+sub add_z_list($$@) {
+        my ($t, $n, @members) = @_;
+
+	my $d = new XmlDoc;
+
+        if ($t eq "distributionlist") {
+
+	    print "adding $t $n..\n";
+	    
+	    $d->start('CreateDistributionListRequest', $MAILNS);
+	    $d->add('name', $MAILNS, undef, $n."\@". $default_domain);
+	    $d->add('a', $MAILNS, {"n" => "zimbraMailStatus"}, "enabled");
+	    $d->end;
+	    
+	    my $r = $SOAP->invoke($url, $d->root(), $context);
+	    # TODO: error checking!
+
+	    if ($r->name eq "Fault") {
+		print "Error adding $n, skipping.\n";
+		return;
+	    }
+
+	    my $z_id;
+	    for my $child (@{$r->children()}) {
+		for my $attr (@{$child->children}) {
+		    $z_id = $attr->content()
+			if ((values %{$attr->attrs()})[0] eq "zimbraId");
+		}
+	    }
+
+	    my $d2 = new XmlDoc;
+	    
+	    $d2->start ('AddDistributionListMemberRequest', $MAILNS);
+	    $d2->add ('id', $MAILNS, undef, $z_id);
+	    for (@members) {
+		$_ .= "\@" . $default_domain
+		    if ($_ !~ /\@/);
+		$d2->add ('dlm', $MAILNS, undef, $_);
+	    }
+	    $d2->end;
+
+	    my $r2 = $SOAP->invoke($url, $d2->root(), $context);
+	    # TODO: error checking!
+
+	} elsif ($t eq "alias") {
+	    print "would add $n of type $t\n";
+	} else {
+	    print "unknown type type $t in add_z_list!?\n";
+	}
+}
+
+
+
+sub delete_z_list($$) {
+    my ($n, $t) = @_;
+
+    my $d = new XmlDoc;
+
+    if ($t eq "distributionlist") {
+
+	# search out the zimbraId
+
+	my $fil = "(&(objectclass=zimbraDistributionList)(uid=$n))";
+	print "searching ldap for dist list with $fil\n"
+	    if ($opts->{n});
+	
+	my $sr = $ldap->search(base=>$z_ldap_base, filter=>$fil);
+	$sr->code && die $sr->error;
+	
+	my @mbrs;
+	my $z_id;
+	for my $l_dist ($sr->entries) {
+	    $z_id = $l_dist->get_value("zimbraId");
+	    
+	    #print "list: $list\n";
+	    #print "members: " , join ' ', @mbrs , "\n";
+	}
+
+	if (defined $z_id) {
+	    # list exists, delete it
+
+	    print "deleting list $n with id $z_id\n";
+
+	    $d->start('DeleteDistributionListRequest', $MAILNS);
+	    $d->add('id', $MAILNS, undef, $z_id);
+	    $d->end();
+
+	    my $r = $SOAP->invoke($url, $d->root(), $context);
+
+	}
+
+    } elsif ($t eq "alias") {
+	print "would delete $n of type $t\n";
+    } else {
+	print "unknown type type $t in delete_z_list!?\n";
+    }
 }
 
 
@@ -166,6 +361,12 @@ sub lists_differ ($$) {
 
     my @l1 = sort @$l1;
     my @l2 = sort @$l2;
+
+    if (exists $opts->{n}) {
+	print "comparing lists:\n";
+	print "\t", join (' ', @l1), " and\n";
+	print "\t", join (' ', @l2), "\n";
+    }
 
     return 1 if ($#l1 != $#l2);
 
@@ -181,27 +382,49 @@ sub lists_differ ($$) {
 sub get_z_alias () {
     my ($name, $types) = @_;
 
-    $types = "aliases,distributionLists"
-	if (!defined $types);
 
-    # search for a distribution list
-    $d->start('SearchDirectoryRequest', $MAILNS);
-    $d->add('query', $MAILNS, {"types" => $types},
-	    "(|(uid=*$name*)(cn=*$name*)(sn=*$name*)(gn=*$name*)(displayName=*$name*)(zimbraId=$name)(mail=*$name*)(zimbraMailAlias=*$name*)(zimbraMailDeliveryAddress=*$name*)(zimbraDomainName=*$name*))");
-    $d->end;
 
-    my $r = SOAP->invoke($url, $d->root(), $context);
-    if ($r->name eq "Fault") {
-	print "Fault while getting zimbra alias:\n";
-	return;
-    }
+# search with Zimbra SOAP doesn't seem to work
+#     $types = "distributionlists"
+# 	if (!defined $types);
 
-    print Dump ($r);
+#     my $query = "(|(uid=*$name*)(cn=*$name*)(sn=*$name*)(gn=*$name*)(displayName=*$name*)(zimbraId=$name)(mail=*$name*)(zimbraMailAlias=*$name*)(zimbraMailDeliveryAddress=*$name*)(zimbraDomainName=*$name*))";
 
- #     for my $child (@{$r->children}) {
-	
+#     my $d = new XmlDoc;
+    
+#     # search for a distribution list
+#     $d->start('SearchDirectoryRequest', $MAILNS); 
+#     $d->add('query', $MAILNS, {"types" => $types}, $query);
+#     $d->end;
+
+#     my $r = $SOAP->invoke($url, $d->root(), $context);
+#     if ($r->name eq "Fault") {
+#  	print "Fault while getting zimbra alias:\n";
+#  	return;
 #     }
     
+#     print Dumper ($r);
+
+
+    my $fil = "(&(objectclass=zimbraDistributionList)(uid=$name))";
+    print "searching ldap for dist list with $fil\n"
+	if (exists $opts->{n});
+
+    my $sr = $ldap->search(base=>$z_ldap_base, filter=>$fil);
+    $sr->code && die $sr->error;
+
+    my @mbrs;
+    for my $l_dist ($sr->entries) {
+	my $list = $l_dist->get_value("uid");
+	@mbrs = $l_dist->get_value("zimbramailforwardingaddress");
+
+	#print "list: $list\n";
+	#print "members: " , join ' ', @mbrs , "\n";
+    }
+
+    my $t = "distributionlist";
+    
+    return ($t, @mbrs);
 }
 
 
@@ -309,7 +532,6 @@ sub merge_into_zimbra ($$) {
     } elsif ($$r =~ /^\s*[$sa$ma]+\s*$/) {
 	print "multiple alias..\n";
 	alias_into_z($$l, $$r);
-
     } elsif ($$r =~ /^\s*${ia}[$sa$ea]+\s*$/) {
 	print "included alias..\n";
 
@@ -488,3 +710,59 @@ sub add_alias($$) {
 #         </SearchDirectoryRequest>
 #     </soap:Body>
 # </soap:Envelope>
+
+
+
+# <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+#     <soap:Header>
+#         <context xmlns="urn:zimbra">
+#             <userAgent xmlns="" name="ZimbraWebClient - FF3.0 (Linux)"/>
+#             <sessionId xmlns="" id="318"/>
+#             <format xmlns="" type="js"/>
+#             <authToken xmlns="">
+#                 0_8613c974d429d5d76eee4bb1f6bf78f33b9e5f3e_69643d33363a38323539616631392d313031302d343366392d613338382d6439393038363234393862623b6578703d31333a313231343631303739343739373b61646d696e3d313a313b747970653d363a7a696d6272613b6d61696c686f73743d31363a3137302e3233352e312e3234313a38303b
+#             </authToken>
+#         </context>
+#     </soap:Header>
+#     <soap:Body>
+#         <CreateDistributionListRequest xmlns="urn:zimbraAdmin">
+#             <name xmlns="">
+#                 testmultiple@dev.domain.org
+#             </name>
+#             <a xmlns="" n="zimbraMailStatus">
+#                 enabled
+#             </a>
+#         </CreateDistributionListRequest>
+#     </soap:Body>
+# </soap:Envelope>
+
+
+
+# <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+#     <soap:Header>
+#         <context xmlns="urn:zimbra">
+#             <userAgent xmlns="" name="ZimbraWebClient - FF3.0 (Linux)"/>
+#             <sessionId xmlns="" id="318"/>
+#             <format xmlns="" type="js"/>
+#             <authToken xmlns="">
+#                 0_8613c974d429d5d76eee4bb1f6bf78f33b9e5f3e_69643d33363a38323539616631392d313031302d343366392d613338382d6439393038363234393862623b6578703d31333a313231343631303739343739373b61646d696e3d313a313b747970653d363a7a696d6272613b6d61696c686f73743d31363a3137302e3233352e312e3234313a38303b
+#             </authToken>
+#         </context>
+#     </soap:Header>
+#     <soap:Body>
+#         <AddDistributionListMemberRequest xmlns="urn:zimbraAdmin">
+#             <id xmlns="">
+#                 3c67539f-97a4-4960-bb8c-5b19714497b7
+#             </id>
+#             <dlm xmlns="">
+#                 morgan@dev.domain.org
+#             </dlm>
+#             <dlm xmlns="">
+#                 morgantest@dev.domain.org
+#             </dlm>
+#         </AddDistributionListMemberRequest>
+#     </soap:Body>
+# </soap:Envelope>
+
+
+
