@@ -29,6 +29,7 @@ sub add_alias($$);
 sub update_z_list($@);
 sub lists_differ($$);
 sub add_z_list($$@);
+sub executable_into_z($$);
 
 
 my $opts;
@@ -42,6 +43,9 @@ my $zimbra_svr  = $opts->{z} || "dmail01.domain.org";
 $|=1;
 
 my $default_domain = "dev.domain.org";
+# name of the host/domain where list software is running
+#   all aliases with '|' will be forwarded there
+my $list_mgmt_host = "dlists.domain.org";
 
 
 ################
@@ -79,9 +83,7 @@ $ldap->bind(dn=>$z_ldap_binddn, password=>$z_ldap_pass);
 
 
 
-# our environment only does program delivery for delivery to majordomo lists.
-#   we forward all aliases that do program delivery to an external host.
-my $list_mgmt_host = qw/lists.domain.org/;
+
 
 # list of alias files
 my @alias_files;
@@ -94,21 +96,22 @@ if ($alias_files =~ /\,/) {
 
 # loop over the list of alias files, open and process each
 for my $af (@alias_files) {
+
+    print "working on $af..\n";
     my $aliases_in;
-    open ($aliases_in, $af) || die "can't open alias file: $af";
+    open ($aliases_in, $af) || die "can't open alias file: $af: $!";
 
     while (<$aliases_in>) {
 	chomp;
 
 	my ($lhs, $rhs);
 	my $rc;
- 	if (my $problem = sync_alias (\$lhs, \$rhs, $_, 
- 				 \&alias_into_elements,
-# 				 \&merge_into_ldap)) {
- 				 \&merge_into_zimbra)) {
- 	    print "skipping /$_/,\n\treason: $problem\n";
- 	    next;
- 	}
+  	if (my $problem = sync_alias (\$lhs, \$rhs, $_, 
+  				 \&alias_into_elements,
+  				 \&merge_into_zimbra)) {
+  	    print "skipping /$_/,\n\treason: $problem\n";
+  	    next;
+  	}
     }
 }
 
@@ -151,8 +154,8 @@ sub alias_into_elements($$$) {
 	$$l = $1;
 	$$r = $2;
 
-	print "/$alias/ broken into:\n\t/$$l/ /$$r/\n"
-	    if (exists $opts->{d});
+#	print "/$alias/ broken into:\n\t/$$l/ /$$r/\n"
+#	    if (exists $opts->{d});
 
     } else {
 	return 1;
@@ -170,13 +173,15 @@ sub alias_into_z($$) {
     my @t = split /\s*,\s*/, $r;
 
     for (@t) {
-	s/^([^\@]+)$/$1\@$default_domain/;
+	s/^([^\@\s]+)\s*$/$1\@$default_domain/;
     }
     
     if (lists_differ(\@z, \@t) ) {
 	update_z_list($type, $l, @t);
     } else {
-	print "lists are the same, moving on..\n";
+	print "lists are the same, moving on..\n"
+	    if (exists $opts->{d});
+       
     }
 }
 
@@ -209,37 +214,65 @@ sub update_z_list($@) {
     }
 
 
+    # check to see if the rhs is a user, if so add forward or
+    # forwards to the account
+    
+    print "checking for user matching lhs $l..\n";
+
+    my $user;
+    
+    my $d = new XmlDoc;
+    $d->start('GetAccountRequest', $MAILNS);
+    $d->add('account', $MAILNS, { "by" => "name" }, $l);
+    $d->end();
+    
+    my $resp = $SOAP->invoke($url, $d->root(), $context);
+    my $middle_child = $resp->find_child('account');
+    if (defined $middle_child) {
+	# don't do this unless there is something there..
+	
+	for my $child (@{$middle_child->children()}) {
+	    $user = $child->content()
+		if (lc ((values %{$child->attrs()})[0]) eq "mail");
+	}
+    }
+    
+    if (defined $user) {
+	add_z_forward($l, @contents);
+	return;
+    }
+
+
     my $mail;
     if ($#contents == 0) {
-
 	my $m = $contents[0];
 
-# I'm not sure if there's a point in looking up the user in ldap.
-# 	print "checking for user matching $m..\n";
-
-# 	my $d = new XmlDoc;
-# 	$d->start('GetAccountRequest', $MAILNS);
-# 	$d->add('account', $MAILNS, { "by" => "name" }, $m);
-# 	$d->end();
+	# check to see if the rhs is a user, if so add forward or
+	# forwards to the account
 	
-# 	my $resp = $SOAP->invoke($url, $d->root(), $context);
-# 	my $middle_child = $resp->find_child('account');
-# 	if (defined $middle_child) {
-# 	    # don't do this uniless there is something there..
+ 	print "checking for user matching rhs $m..\n";
 
-# 	    for my $child (@{$middle_child->children()}) {
-# 		$mail = $child->content()
-# 		    if (lc ((values %{$child->attrs()})[0]) eq "mail");
-# 	    }
-# 	}
+ 	my $d = new XmlDoc;
+ 	$d->start('GetAccountRequest', $MAILNS);
+ 	$d->add('account', $MAILNS, { "by" => "name" }, $m);
+ 	$d->end();
 
+ 	my $resp = $SOAP->invoke($url, $d->root(), $context);
+ 	my $middle_child = $resp->find_child('account');
+ 	if (defined $middle_child) {
+ 	    # don't do this unless there is something there..
 
+ 	    for my $child (@{$middle_child->children()}) {
+ 		$mail = $child->content()
+ 		    if (lc ((values %{$child->attrs()})[0]) eq "mail");
+ 	    }
+ 	}
     }
     
 
     # should we pass the type here since we're determining it anyway?
     if (defined $mail) {
-	# add an alias
+	# add an alias/forward
 	delete_z_list($l, $existing_type)
 	    if ($existing_type ne "alias");
 	add_z_list("alias", $l, @contents);
@@ -254,6 +287,24 @@ sub update_z_list($@) {
 	delete_z_list($l, $existing_type);
     }
 
+}
+
+
+
+sub add_z_forward($@) {
+    my ($user, @forwards) = @_;
+
+    for (@forwards) {
+	s/^\s*\\//;
+    }
+
+    if ($user !~ /\@/) {
+	$user .= "\@".$default_domain;
+    }
+
+    print "would add forward, $user: " . join ' ', @forwards, "\n";
+
+    # if an address in @forward matches $user deliver locally & forward
 }
 
 
@@ -274,6 +325,7 @@ sub add_z_list($$@) {
 	    my $r = $SOAP->invoke($url, $d->root(), $context);
 	    # TODO: error checking!
 
+	    print "add result: ", $r->name, "\n";
 	    if ($r->name eq "Fault") {
 		print "Error adding $n, skipping.\n";
 		return;
@@ -338,7 +390,8 @@ sub delete_z_list($$) {
 	if (defined $z_id) {
 	    # list exists, delete it
 
-	    print "deleting list $n with id $z_id\n";
+	    print "deleting list $n with id $z_id\n"
+		if (exists $opts->{d});
 
 	    $d->start('DeleteDistributionListRequest', $MAILNS);
 	    $d->add('id', $MAILNS, undef, $z_id);
@@ -362,7 +415,7 @@ sub lists_differ ($$) {
     my @l1 = sort @$l1;
     my @l2 = sort @$l2;
 
-    if (exists $opts->{n}) {
+    if (exists $opts->{d}) {
 	print "comparing lists:\n";
 	print "\t", join (' ', @l1), " and\n";
 	print "\t", join (' ', @l2), "\n";
@@ -408,7 +461,7 @@ sub get_z_alias () {
 
     my $fil = "(&(objectclass=zimbraDistributionList)(uid=$name))";
     print "searching ldap for dist list with $fil\n"
-	if (exists $opts->{n});
+	if (exists $opts->{d});
 
     my $sr = $ldap->search(base=>$z_ldap_base, filter=>$fil);
     $sr->code && die $sr->error;
@@ -447,14 +500,14 @@ sub get_z_alias () {
 
 # }
 
-# sub executable_into_z($$) {
-#     my ($l, $r) = @_;
-
-#     # break up $r
+sub executable_into_z($$) {
+    my ($l, $r) = @_;
     
-#     # build a Zimbra distribution list forwarding to $list_mgmt_host
+    # build a Zimbra distribution list forwarding to $list_mgmt_host
 
-# }
+    print "calling alias_into_z from executable_into_z\n";
+    alias_into_z($l, $l . "\@$list_mgmt_host");
+}
 
 # # TODO: executable + included?
 # sub executable_plus_include_into_z($$) {
@@ -476,9 +529,6 @@ sub merge_into_zimbra ($$) {
     my ($l, $r) = @_;
     # $opts->{d} && print "\nmerging into Zimbra: /$$l/ /$$r/\n";
 
-    # alias types:
-
-
     return "left hand side of alias failed sanity check"
 	if ( $$l !~ /^\s*[a-zA-Z0-9\-_\.]+\s*$/);
 
@@ -494,7 +544,6 @@ sub merge_into_zimbra ($$) {
 	    # \s       alias: user1, user2
 	    #
 	    $$r !~ /^\s*[a-zA-Z0-9\-_\,\@\.\/\\:|\"\s]+\s*$/ );
-
 
     # the lhs is always the alias, by now we know it's valid
     # the rhs is a
@@ -521,27 +570,39 @@ sub merge_into_zimbra ($$) {
 
     #print "sa: /$sa/\n";
 
-    print "\nalias: /$$l: $$r/\n";
+    print "\nalias: /$$l: $$r/\n"
+	if (exists $opts->{d});
  
     if    ($$r =~ /^\s*[$sa]+\s*$/) {
-	print "single alias..\n";
+	print "single alias..\n"
+	    if (exists $opts->{d});
         alias_into_z($$l, $$r);
     } elsif ($$r =~ /^\s*\/dev\/null\s*$/) {
-	print "dev null alias..\n";
-
+	print "dev null alias..\n"
+	    if (exists $opts->{d});
     } elsif ($$r =~ /^\s*[$sa$ma]+\s*$/) {
-	print "multiple alias..\n";
+	print "multiple alias..\n"
+	    if (exists $opts->{d});
 	alias_into_z($$l, $$r);
     } elsif ($$r =~ /^\s*${ia}[$sa$ea]+\s*$/) {
-	print "included alias..\n";
-
+	print "included alias..\n"
+	    if (exists $opts->{d});
     } elsif ($$r =~ /^\s*[$sa$ea]+\s*$/) {
-	print "executable alias..\n";
-
+	print "executable alias..\n"
+	    if (exists $opts->{d});
+	executable_into_z($$l, $$r);
     } elsif ($$r =~ /^\s*${ia}${ea}|${ea}${ia}\s*$/) {
-	print "executable and included alias..\n";
+
+	# TODO: wrong!
+        # alias: /t: wilkins		: twilkins@mlp.domain.org/
+        # executable and included alias..
+
+	print "executable and included alias..\n"
+	    if (exists $opts->{d});
+	executable_into_z($$l, $$r);
     } else {
-	print "can't categorize this alias..\n";
+	print "can't categorize this alias..\n"
+	    if (exists $opts->{d});
     }
 
 
