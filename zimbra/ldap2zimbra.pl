@@ -14,6 +14,16 @@
 #       generalize build_zmailhost()
 #       correct hacks.  Search in script for "hack."
 
+##########
+# examples
+# 
+# dev:
+# ldap2zimbra.pl -n -w ldap-pass -m dev.domain.org -p zimbra-pass -z dmail01.domain.org
+# 
+# prod:
+# ldap2zimbra.pl -n -s `cat /usr/local/users_in_zimbra.txt` -w ldap-pass -m domain.org -p zimbra-pass -z mail01.domain.org
+# ldap2zimbra.pl -n -s `cat /usr/local/users_in_zimbra.txt` -w ldap-pass -m domain.org -p zimbra-pass -z mail01.domain.org
+
 
 
 
@@ -22,7 +32,7 @@
 #
 # The Zimbra SOAP libraries.  Download and uncompress the Zimbra
 # source code to get them.
-use lib "/home/morgan/Docs/zimbra/zcs-5.0.2_GA_1975-src/ZimbraServer/src/perl/soap";
+use lib "/usr/local/zcs-5.0.2_GA_1975-src/ZimbraServer/src/perl/soap";
 # these accounts will never be added, removed or modified
 #   It's a perl regex
 my $zimbra_special = 
@@ -377,8 +387,8 @@ sub get_z2l() {
 	"zimbrapreffromdisplay" => ["givenname", "sn"],
         "givenname" =>             ["givenname"],
 	"sn" =>                    ["sn"],
-	"displayname" =>           ["givenname", "sn", 
-				    "(", "orgoccupationalgroup", ")"],
+	"displayname" =>           ["givenname", "sn"],
+		#		    "(", "orgoccupationalgroup", ")"],
 	"zimbramailhost" =>        ["placeholder.."], # fix this, also hacked in
 	                                              # build_target_z_value()
         "zimbramailcanonicaladdress" => ["placeholder.."]  # fix this too. 
