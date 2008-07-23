@@ -13,7 +13,7 @@ use Data::Dumper;
 #use Net::LDAP;
 # The Zimbra SOAP libraries.  Download and uncompress the Zimbra
 # source code to get them.
-use lib "/home/morgan/Docs/zimbra/zcs-5.0.2_GA_1975-src/ZimbraServer/src/perl/soap";
+use lib "/usr/local/zcs-5.0.2_GA_1975-src/ZimbraServer/src/perl/soap";
 use XmlElement;
 use XmlDoc;
 use Soap;
@@ -169,14 +169,14 @@ sub alias_into_z($$) {
     my ($l, $r) = @_;
     # try to find a user in zimbra matching $r
 
-    my ($type, @z) = get_z_alias($l);
+    my ($ideal_type, $type, @z) = get_z_alias($l);
     my @t = split /\s*,\s*/, $r;
 
     for (@t) {
 	s/^([^\@\s]+)\s*$/$1\@$default_domain/;
     }
     
-    if (lists_differ(\@z, \@t) ) {
+    if (lists_differ(\@z, \@t) or $type eq $ideal_type) {
 	update_z_list($type, $l, @t);
     } else {
 	print "lists are the same, moving on..\n"
@@ -189,7 +189,7 @@ sub alias_into_z($$) {
 
 #### sub update_z_list
 # we know the recipient list is different
-# we need to decide (based on $type) if 
+# we need to decide based on $type if 
 #    we delete the list in Zimbra (if it exists but is the wrong type) and
 #    we sync an existing list (if it exists and is the right type) or
 #    add a new list (if it it's not there or we needed to delete it)
@@ -226,18 +226,27 @@ sub update_z_list($@) {
     $d->add('account', $MAILNS, { "by" => "name" }, $l);
     $d->end();
     
-    my $resp = $SOAP->invoke($url, $d->root(), $context);
-    my $middle_child = $resp->find_child('account');
+    my $r = $SOAP->invoke($url, $d->root(), $context);
+
+# searching for "Fault" is not sufficient as a missing account will return a fault..
+#    if ($r->name eq "Fault") {
+	
+    
+#	print "problem searcing out $l:";
+#	print Dumper($r)
+#    }
+
+    my $middle_child = $r->find_child('account');
     if (defined $middle_child) {
 	# don't do this unless there is something there..
 	
 	for my $child (@{$middle_child->children()}) {
 	    $user = $child->content()
-		if (lc ((values %{$child->attrs()})[0]) eq "mail");
+		if (lc ((values %{$child->attrs()})[0]) eq "uid");
 	}
     }
-    
-    if (defined $user) {
+
+    if (defined $user && $user eq $l) {
 	add_z_forward($l, @contents);
 	return;
     }
@@ -257,8 +266,8 @@ sub update_z_list($@) {
  	$d->add('account', $MAILNS, { "by" => "name" }, $m);
  	$d->end();
 
- 	my $resp = $SOAP->invoke($url, $d->root(), $context);
- 	my $middle_child = $resp->find_child('account');
+ 	my $r = $SOAP->invoke($url, $d->root(), $context);
+ 	my $middle_child = $r->find_child('account');
  	if (defined $middle_child) {
  	    # don't do this unless there is something there..
 
@@ -286,7 +295,6 @@ sub update_z_list($@) {
 	# recipients, delete it.
 	delete_z_list($l, $existing_type);
     }
-
 }
 
 
@@ -302,30 +310,100 @@ sub add_z_forward($@) {
 	$user .= "\@".$default_domain;
     }
 
-    print "would add forward, $user: " . join ' ', @forwards, "\n";
+
+    if ($#forwards == 0) {
+	$user        =~ s/domain\.org/dev.domain.org/
+	    if ($user !~ /dev.domain.org/);
+	$forwards[0] =~ s/domain\.org/dev.domain.org/
+	    if ($forwards[0] !~ /dev.domain.org/);
+	
+    }
+
+    # zimbra forwarding from mail.domain to domain makes some of these
+    # forwards irrelevant
+    return if (lc $user eq lc $forwards[0]);
+
+    print "adding forward, /$user/: " . join ' ', @forwards, "\n";
 
     # if an address in @forward matches $user deliver locally & forward
+    
+    my $id;
+    my $d = new XmlDoc;
+
+    $d->start('GetAccountRequest', $MAILNS); 
+    $d->add('account', $MAILNS, { "by" => "name" }, $user);
+    $d->end();
+
+    my $r = $SOAP->invoke($url, $d->root(), $context);
+
+    my $middle_child = $r->find_child('account');
+     #my $delivery_addr_element = $r->find_child('zimbraMailDeliveryAddress');
+
+    # user entries return a list of XmlElements
+    return undef if !defined $middle_child;
+    for my $child (@{$middle_child->children()}) {
+	# TODO: check for multiple attrs.  The data structure allows
+	#     it but I don't think it will ever happen.
+	#print "content: " . $child->content() . "\n";
+	#print "attrs: ". (values %{$child->attrs()})[0];
+	# print ((values %{$child->attrs()})[0], ": ", $child->content(), "\n");
+	
+
+	#$id =  $child->content();
+	if ((values %{$child->attrs()})[0] eq "zimbraId") {
+	    $id = $child->content();
+	}
+    }
+
+    my $d2 = new XmlDoc;    
+    print "modifing id: $id\n";
+    $d2->start('ModifyAccountRequest', $MAILNS);
+    $d2->add('id', $MAILNS, undef, $id);
+    $d2->add('a', $MAILNS, 
+	     { "n" => "zimbraFeatureMailForwardingEnabled"},
+	     "TRUE");
+
+
+    for my $f (@forwards) {
+	my $forward_to = $f;
+	$forward_to .= "\@" . $default_domain
+	    unless ($forward_to =~ /\@/);
+
+	print "adding $user: $forward_to\n";
+	$d2->add('a', $MAILNS,
+		 { "n" => "zimbraPrefMailForwardingAddress" },
+		 $forward_to)
+    }
+    $d2->end();
+
+    my $r2 = $SOAP->invoke($url, $d2->root(), $context);
+
+    if ($r2->name eq "Fault") {
+	print "Error adding forward(s) to $user, skipping.\n";
+	return;
+    }
+
 }
 
 
 sub add_z_list($$@) {
         my ($t, $n, @members) = @_;
 
-	my $d = new XmlDoc;
-
         if ($t eq "distributionlist") {
+	    my $d = new XmlDoc;
 
 	    print "adding $t $n..\n";
 	    
 	    $d->start('CreateDistributionListRequest', $MAILNS);
 	    $d->add('name', $MAILNS, undef, $n."\@". $default_domain);
 	    $d->add('a', $MAILNS, {"n" => "zimbraMailStatus"}, "enabled");
+	    $d->add('a', $MAILNS, {"n" => "zibraHideInGal"}, "TRUE");
 	    $d->end;
 	    
 	    my $r = $SOAP->invoke($url, $d->root(), $context);
 	    # TODO: error checking!
 
-	    print "add result: ", $r->name, "\n";
+	    # print "add result: ", $r->name, "\n";
 	    if ($r->name eq "Fault") {
 		print "Error adding $n, skipping.\n";
 		return;
@@ -351,13 +429,69 @@ sub add_z_list($$@) {
 	    $d2->end;
 
 	    my $r2 = $SOAP->invoke($url, $d2->root(), $context);
-	    # TODO: error checking!
+	    if ($r2->name eq "Fault") {
+		print "error adding $n:\n";
+		print Dumper ($r2);
+	    }
 
 	} elsif ($t eq "alias") {
-	    print "would add $n of type $t\n";
+	    print "adding $n of type $t to $members[0]\n";
+
+	    my $z_id = get_account_id_by_name($members[0]);
+
+	    my $d = new XmlDoc;
+	    $d->start('AddAccountAliasRequest', $MAILNS);
+	    $d->add('id', $MAILNS, undef, $z_id);
+	    #my $a = $n . $default_domain;
+	    $d->add('alias', $MAILNS, undef, $n . "\@" . $default_domain);
+	    #$d->add('alias', $MAILNS, undef, $a);
+	    $d->end;
+	    my $r = $SOAP->invoke($url, $d->root(), $context);
+	    
+
+# TODO: see if alias exists before blindly adding it and ignoring the result
+# 	    if ($r->name eq "Fault") {
+# 		print "error adding $n:\n";
+# 		print Dumper ($r);
+		
+# 	    }
+
 	} else {
 	    print "unknown type type $t in add_z_list!?\n";
 	}
+}
+
+
+sub get_account_id_by_name($) {
+    my $name = shift;
+
+    my $d = new XmlDoc;
+
+    $d->start('GetAccountRequest', $MAILNS); 
+    $d->add('account', $MAILNS, { "by" => "name" }, $name);
+    $d->end();
+    
+    my $r = $SOAP->invoke($url, $d->root(), $context);
+    
+    my $middle_child = $r->find_child('account');
+    #my $delivery_addr_element = $r->find_child('zimbraMailDeliveryAddress');
+
+    # user entries return a list of XmlElements
+    return undef if !defined $middle_child;
+    for my $child (@{$middle_child->children()}) {
+	# TODO: check for multiple attrs.  The data structure allows
+	#     it but I don't think it will ever happen.
+	#print "content: " . $child->content() . "\n";
+	#print "attrs: ". (values %{$child->attrs()})[0];
+	# print ((values %{$child->attrs()})[0], ": ", $child->content(), "\n");
+	
+	
+	#$id =  $child->content();
+	if ((values %{$child->attrs()})[0] eq "zimbraId") {
+	    return $child->content();
+	}
+    }
+    return undef; # no id found
 }
 
 
@@ -409,6 +543,7 @@ sub delete_z_list($$) {
 }
 
 
+
 sub lists_differ ($$) {
     my ($l1, $l2) = @_;
 
@@ -433,7 +568,8 @@ sub lists_differ ($$) {
 
 
 sub get_z_alias () {
-    my ($name, $types) = @_;
+#    my ($name, $types) = @_;
+    my ($name) = @_;
 
 
 
@@ -459,6 +595,9 @@ sub get_z_alias () {
 #     print Dumper ($r);
 
 
+    # default to distribution list
+    my $t = "distributionlist";
+
     my $fil = "(&(objectclass=zimbraDistributionList)(uid=$name))";
     print "searching ldap for dist list with $fil\n"
 	if (exists $opts->{d});
@@ -474,10 +613,39 @@ sub get_z_alias () {
 	#print "list: $list\n";
 	#print "members: " , join ' ', @mbrs , "\n";
     }
-
-    my $t = "distributionlist";
     
-    return ($t, @mbrs);
+    
+    
+    my $fil2 = "(zimbramailalias=$name\@$default_domain)";
+
+    my $d = new XmlDoc;
+    $d->start('SearchDirectoryRequest', $MAILNS); 
+    $d->add('query', $MAILNS, undef, $fil2);
+    $d->end;
+    
+    my $r = $SOAP->invoke($url, $d->root(), $context);
+    if ($r->name eq "Fault") {
+  	print "Fault while getting zimbra alias:\n";
+  	return;
+    }
+
+    my $user;
+    my $middle_child = $r->find_child('account');
+    if (defined $middle_child) {
+	# don't do this unless there is something there..
+	
+	for my $child (@{$middle_child->children()}) {
+	    $user = $child->content()
+		if (lc ((values %{$child->attrs()})[0]) eq "mail");
+	}
+    }
+
+
+    # ideal type
+    my $it = "distribution_list";
+    $it = "alias" if defined $user;
+    
+    return ($it, $t, @mbrs);
 }
 
 
