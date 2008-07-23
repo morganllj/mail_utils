@@ -40,8 +40,7 @@ my $zimbra_special =
                # accounts. This will cause you trouble if you have users that 
                # start with ham or spam  For instance: ham.let.  Unlikely 
                # perhaps.
-    'ser|'.
-#    'mlehmann|gab|morgan|cferet|'.  
+#    'ser|'.'mlehmann|gab|morgan|cferet|'.  
                # Steve, Matt, Gary, Feret and I
     'sjones|aharris|'.        # Gary's test users
     'hammy|spammy$';          # Spam training users 
@@ -406,16 +405,26 @@ sub build_zmailhost($) {
 
     my $n = pop @i;
 
-    if ($n =~ /^[01]{1}$/) {
-	return "mail01.domain.org";
-    } elsif ($n =~ /^[23]{1}$/) {
-	return "mail02.domain.org";
-    } elsif ($n =~ /^[45]{1}$/) {
-	return "mail03.domain.org";
-    } elsif ($n =~ /^[67]{1}$/) {
-	return "mail04.domain.org";
-    } elsif ($n =~ /^[89]{1}$/) {
-	return "mail05.domain.org";
+
+
+    # TODO: revisit!  Add provisions for dmail02 and unknown domain
+    if ($zimbra_domain eq "domain.org") {
+	if ($n =~ /^[01]{1}$/) {
+	    return "mail01.domain.org";
+	} elsif ($n =~ /^[23]{1}$/) {
+	    return "mail02.domain.org";
+	} elsif ($n =~ /^[45]{1}$/) {
+	    return "mail03.domain.org";
+	} elsif ($n =~ /^[67]{1}$/) {
+	    return "mail04.domain.org";
+	} elsif ($n =~ /^[89]{1}$/) {
+	    return "mail05.domain.org";
+	}
+    } elsif ($zimbra_domain eq "dev.domain.org") {
+	return "dmail01.domain.org";
+    } else {
+	print "WARNING! returning undef mailhost!\n";
+	return undef;
     }
 }
 
