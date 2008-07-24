@@ -10,14 +10,13 @@
 use strict;
 use Getopt::Std;
 use Data::Dumper;
-#use Net::LDAP;
+use Net::LDAP;
 # The Zimbra SOAP libraries.  Download and uncompress the Zimbra
 # source code to get them.
 use lib "/usr/local/zcs-5.0.2_GA_1975-src/ZimbraServer/src/perl/soap";
 use XmlElement;
 use XmlDoc;
 use Soap;
-use Net::LDAP;
 
 # sub protos
 sub print_usage();
@@ -30,6 +29,7 @@ sub update_z_list($@);
 sub lists_differ($$);
 sub add_z_list($$@);
 sub executable_into_z($$);
+sub read_included($);
 
 
 my $opts;
@@ -81,10 +81,6 @@ my $ldap = Net::LDAP->new($z_ldap_host) or die "$@";
 $ldap->bind(dn=>$z_ldap_binddn, password=>$z_ldap_pass);
 
 
-
-
-
-
 # list of alias files
 my @alias_files;
 
@@ -114,9 +110,6 @@ for my $af (@alias_files) {
   	}
     }
 }
-
-
-
 
 
 
@@ -154,9 +147,6 @@ sub alias_into_elements($$$) {
 	$$l = $1;
 	$$r = $2;
 
-#	print "/$alias/ broken into:\n\t/$$l/ /$$r/\n"
-#	    if (exists $opts->{d});
-
     } else {
 	return 1;
     }
@@ -169,14 +159,23 @@ sub alias_into_z($$) {
     my ($l, $r) = @_;
     # try to find a user in zimbra matching $r
 
-    my ($ideal_type, $type, @z) = get_z_alias($l);
-    my @t = split /\s*,\s*/, $r;
+    my ($ideal_type, $type, $list, @z) = get_z_alias($l);
+    my @t;
+    
+    @t = split /\s*,\s*/, $r
+	if (defined $r);
+    
 
     for (@t) {
 	s/^([^\@\s]+)\s*$/$1\@$default_domain/;
     }
-    
-    if (lists_differ(\@z, \@t) or $type eq $ideal_type) {
+
+
+    if (!defined $list) {
+	print "list is undefined\n";
+    }
+
+    if (lists_differ(\@z, \@t) or !defined $list) {
 	update_z_list($type, $l, @t);
     } else {
 	print "lists are the same, moving on..\n"
@@ -225,7 +224,7 @@ sub update_z_list($@) {
     $d->start('GetAccountRequest', $MAILNS);
     $d->add('account', $MAILNS, { "by" => "name" }, $l);
     $d->end();
-    
+
     my $r = $SOAP->invoke($url, $d->root(), $context);
 
 # searching for "Fault" is not sufficient as a missing account will return a fault..
@@ -285,45 +284,51 @@ sub update_z_list($@) {
 	delete_z_list($l, $existing_type)
 	    if ($existing_type ne "alias");
 	add_z_list("alias", $l, @contents);
-    } elsif ( $#contents > -1) {
+    } else { # $#contents > -1 or $#contents == -1
 	# add a dist list
 	delete_z_list($l, $existing_type);
 	add_z_list("distributionlist", $l, @contents)
 	    if ($existing_type ne "dist_list");
-    } else { # $#contents < 0
-	# There's a list in the alias file that has no valid
-	# recipients, delete it.
-	delete_z_list($l, $existing_type);
     }
 }
 
 
 
 sub add_z_forward($@) {
-    my ($user, @forwards) = @_;
+    my ($user, @in_forwards) = @_;
 
-    for (@forwards) {
-	s/^\s*\\//;
-    }
+    $user .= "\@".$default_domain
+	if ($user !~ /\@/);
 
-    if ($user !~ /\@/) {
-	$user .= "\@".$default_domain;
-    }
+    my $disable_local_delivery = "TRUE";  # default is to not deliver locally
+    my @forwards;
+    for (@in_forwards) {
 
+	if ($_ =~ /^\s*\\$user/) {
+	    $disable_local_delivery = "FALSE";
+	    next;
+	}
 
-    if ($#forwards == 0) {
-	$user        =~ s/domain\.org/dev.domain.org/
-	    if ($user !~ /dev.domain.org/);
-	$forwards[0] =~ s/domain\.org/dev.domain.org/
-	    if ($forwards[0] !~ /dev.domain.org/);
-	
+	if ($_ =~ /^\s*\\/) {
+	    print "skipping malformed entry /$_/\n";
+	    next;
+	}
+
+	$_ .= "\@".$default_domain
+	    unless ($_ =~ /\@/);
+
+ 	$_ =~ s/domain\.org/dev.domain.org/
+ 	    if ($_ !~ /dev.domain.org/);
+
+	push @forwards, $_
+	    unless lc $_ eq lc $user;
     }
 
     # zimbra forwarding from mail.domain to domain makes some of these
     # forwards irrelevant
-    return if (lc $user eq lc $forwards[0]);
+    return if (lc $user eq lc $forwards[0] && $#forwards == 0);
 
-    print "adding forward, /$user/: " . join ' ', @forwards, "\n";
+    print "adding forward, $user: " . join ' ', @forwards, "\n";
 
     # if an address in @forward matches $user deliver locally & forward
     
@@ -337,7 +342,6 @@ sub add_z_forward($@) {
     my $r = $SOAP->invoke($url, $d->root(), $context);
 
     my $middle_child = $r->find_child('account');
-     #my $delivery_addr_element = $r->find_child('zimbraMailDeliveryAddress');
 
     # user entries return a list of XmlElements
     return undef if !defined $middle_child;
@@ -356,20 +360,18 @@ sub add_z_forward($@) {
     }
 
     my $d2 = new XmlDoc;    
-    print "modifing id: $id\n";
     $d2->start('ModifyAccountRequest', $MAILNS);
     $d2->add('id', $MAILNS, undef, $id);
-    $d2->add('a', $MAILNS, 
-	     { "n" => "zimbraFeatureMailForwardingEnabled"},
+    $d2->add('a', $MAILNS, { "n" => "zimbraFeatureMailForwardingEnabled"}, 
 	     "TRUE");
-
+    $d2->add('a', $MAILNS, { "n" => "zimbraPrefMailLocalDeliveryDisabled"}, 
+	     $disable_local_delivery);
 
     for my $f (@forwards) {
 	my $forward_to = $f;
 	$forward_to .= "\@" . $default_domain
 	    unless ($forward_to =~ /\@/);
 
-	print "adding $user: $forward_to\n";
 	$d2->add('a', $MAILNS,
 		 { "n" => "zimbraPrefMailForwardingAddress" },
 		 $forward_to)
@@ -380,11 +382,11 @@ sub add_z_forward($@) {
 
     if ($r2->name eq "Fault") {
 	print "Error adding forward(s) to $user, skipping.\n";
+	print Dumper ($r2);
 	return;
     }
 
 }
-
 
 sub add_z_list($$@) {
         my ($t, $n, @members) = @_;
@@ -397,7 +399,7 @@ sub add_z_list($$@) {
 	    $d->start('CreateDistributionListRequest', $MAILNS);
 	    $d->add('name', $MAILNS, undef, $n."\@". $default_domain);
 	    $d->add('a', $MAILNS, {"n" => "zimbraMailStatus"}, "enabled");
-	    $d->add('a', $MAILNS, {"n" => "zibraHideInGal"}, "TRUE");
+	    $d->add('a', $MAILNS, {"n" => "zimbraHideInGal"}, "TRUE");
 	    $d->end;
 	    
 	    my $r = $SOAP->invoke($url, $d->root(), $context);
@@ -406,6 +408,7 @@ sub add_z_list($$@) {
 	    # print "add result: ", $r->name, "\n";
 	    if ($r->name eq "Fault") {
 		print "Error adding $n, skipping.\n";
+		print Dumper ($r);
 		return;
 	    }
 
@@ -419,19 +422,23 @@ sub add_z_list($$@) {
 
 	    my $d2 = new XmlDoc;
 	    
-	    $d2->start ('AddDistributionListMemberRequest', $MAILNS);
-	    $d2->add ('id', $MAILNS, undef, $z_id);
-	    for (@members) {
-		$_ .= "\@" . $default_domain
-		    if ($_ !~ /\@/);
-		$d2->add ('dlm', $MAILNS, undef, $_);
-	    }
-	    $d2->end;
+	    if ($#members > -1) {
+		$d2->start ('AddDistributionListMemberRequest', $MAILNS);
+		$d2->add ('id', $MAILNS, undef, $z_id);
 
-	    my $r2 = $SOAP->invoke($url, $d2->root(), $context);
-	    if ($r2->name eq "Fault") {
-		print "error adding $n:\n";
-		print Dumper ($r2);
+		for (@members) {
+		    $_ .= "\@" . $default_domain
+			if ($_ !~ /\@/);
+		    $d2->add ('dlm', $MAILNS, undef, $_);
+		}
+		$d2->end;
+
+
+		my $r2 = $SOAP->invoke($url, $d2->root(), $context);
+		if ($r2->name eq "Fault") {
+		    print "error adding $n:\n";
+		    print Dumper ($r2);
+		}
 	    }
 
 	} elsif ($t eq "alias") {
@@ -516,9 +523,6 @@ sub delete_z_list($$) {
 	my $z_id;
 	for my $l_dist ($sr->entries) {
 	    $z_id = $l_dist->get_value("zimbraId");
-	    
-	    #print "list: $list\n";
-	    #print "members: " , join ' ', @mbrs , "\n";
 	}
 
 	if (defined $z_id) {
@@ -571,8 +575,6 @@ sub get_z_alias () {
 #    my ($name, $types) = @_;
     my ($name) = @_;
 
-
-
 # search with Zimbra SOAP doesn't seem to work
 #     $types = "distributionlists"
 # 	if (!defined $types);
@@ -606,8 +608,10 @@ sub get_z_alias () {
     $sr->code && die $sr->error;
 
     my @mbrs;
+
+    my $list;
     for my $l_dist ($sr->entries) {
-	my $list = $l_dist->get_value("uid");
+	$list = $l_dist->get_value("uid");
 	@mbrs = $l_dist->get_value("zimbramailforwardingaddress");
 
 	#print "list: $list\n";
@@ -642,31 +646,11 @@ sub get_z_alias () {
 
 
     # ideal type
-    my $it = "distribution_list";
+    my $it = "distributionlist";
     $it = "alias" if defined $user;
     
-    return ($it, $t, @mbrs);
+    return ($it, $t,$list, @mbrs);
 }
-
-
-# sub sync_multiple($$) {
-#     my ($l, $r) = @_;
-    
-#     # build a Zimbra distribution list
-    
-    
-# }
-
-
-
-# sub included_into_z($$) {
-#     my ($l, $r) = @_;
-
-#     # open included file
-#     my @a = get_addresses($r);
-#     # build a Zimbra distribution list with the contents
-
-# }
 
 sub executable_into_z($$) {
     my ($l, $r) = @_;
@@ -696,6 +680,8 @@ sub executable_into_z($$) {
 sub merge_into_zimbra ($$) {
     my ($l, $r) = @_;
     # $opts->{d} && print "\nmerging into Zimbra: /$$l/ /$$r/\n";
+
+    $$r =~ s/\s*\#.*$//;  # remove comments after the alias
 
     return "left hand side of alias failed sanity check"
 	if ( $$l !~ /^\s*[a-zA-Z0-9\-_\.]+\s*$/);
@@ -740,14 +726,17 @@ sub merge_into_zimbra ($$) {
 
     print "\nalias: /$$l: $$r/\n"
 	if (exists $opts->{d});
- 
+
+    
     if    ($$r =~ /^\s*[$sa]+\s*$/) {
 	print "single alias..\n"
 	    if (exists $opts->{d});
         alias_into_z($$l, $$r);
-    } elsif ($$r =~ /^\s*\/dev\/null\s*$/) {
+    } elsif ($$r =~ /^\s*\/dev\/null\s*$/ ||
+	     $$r =~ /^\s*nobody\*/) {
 	print "dev null alias..\n"
 	    if (exists $opts->{d});
+	alias_into_z($$l, undef);
     } elsif ($$r =~ /^\s*[$sa$ma]+\s*$/) {
 	print "multiple alias..\n"
 	    if (exists $opts->{d});
@@ -755,6 +744,21 @@ sub merge_into_zimbra ($$) {
     } elsif ($$r =~ /^\s*${ia}[$sa$ea]+\s*$/) {
 	print "included alias..\n"
 	    if (exists $opts->{d});
+
+	if ($$l =~ /^all/) {
+	    print "skipping all alias: $$l\n";
+	    return;
+	}
+
+	my $rcpts = read_included ($$r);
+	if (!defined $rcpts) {
+	    print "failed to parse $$l, skipping..\n";
+	} else {
+	    print "rcpts: $rcpts\n";
+	    alias_into_z($$l, $rcpts)
+	}
+
+	
     } elsif ($$r =~ /^\s*[$sa$ea]+\s*$/) {
 	print "executable alias..\n"
 	    if (exists $opts->{d});
@@ -772,9 +776,6 @@ sub merge_into_zimbra ($$) {
 	print "can't categorize this alias..\n"
 	    if (exists $opts->{d});
     }
-
-
-
 
 
     # single full qualified address or multiple addresses
@@ -795,7 +796,29 @@ sub merge_into_zimbra ($$) {
 
 }
 
+sub read_included($) {
+    my $r = shift;
 
+    print "in read_included: /$r/\n";
+    my $f = $r;
+    $f =~ s/\s*:include:\s*//;
+    $f =~ s/\s+$//;
+
+    print "opening $f..\n"
+	if (exists $opts->{d});
+    
+    open (IN, $f) || return undef;
+
+    my @f;
+    while (<IN>) { chomp; push @f, $_ };
+
+    close (IN);
+
+    return join ", ", @f
+	if ($#f > -1);
+
+    return undef;
+}
 
 sub add_alias($$) {
     my ($l, $r) = @_;
@@ -812,39 +835,6 @@ sub add_alias($$) {
 #    print "in add_alias..\n";
     return 0;
 }
-
-
-
-
-# Identifies type of alias based on contents of rhs.
-# sub alias_type($) {
-#     my $r = shift;
-	       
-#     # print "r: $$r\n";
-
-#     my $alias_type;
-#     if ($$r =~ /^\s*[a-zA-Z0-9_\-_\.\\]+$/) {
-# 	# one local user
-# 	return "local_user";
-#     } elsif ($$r =~ /^\s*[a-zA-Z0-9_\-\.\@\s\,\\]+$/) {
-# 	# one non-local address or multiple addresses.
-# 	# print "one nonlocal or multiple addresses: $$l: $$r\n";
-# 	return "multiple";
-#      } elsif ($$r =~ /:\s*include\s*:/ &&
-# 	      $$r =~ /^\s*[a-zA-Z0-9_\-\.\@\s\,\\\/:]+$/) {
-# 	 # included file
-# 	 # print "included file: $$l: $$r\n";
-# 	 return "included_file";
-#      } elsif ($$r =~ /^\s*"\|[a-zA-Z0-9_\-\.\@\s\,\\\/:"]+$/) {
-# 	 # deliver to a program
-#          # print "deliver to a program: $$l: $$r\n";
-#          return "prog_delivery";
-#      } else {
-#          return "unknown";
-#      }
-# }
-
-
 
 
 
