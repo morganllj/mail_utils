@@ -59,38 +59,60 @@ while(<>) {
 #    print "entry: /$_/\n";
 
     my ($dn) = /(dn:[^\n]+)\n/;
-    my $d;
+    my $d = "ext.domain.org";
 
     my $entry = $_;
 
     
-    next if (defined $dn && $dn =~ /dn:\s*ou=/);
+    next if (!defined $dn || $dn =~ /dn:\s*ou=/);
     
-    if (defined $dn) {
-	my $d = "ext.domain.org";
+#    if (defined $dn) {
+#    my $d = "ext.domain.org";
+    
+    if (/o=piserverdb\n/i) {
+#	print "$dn\n";
+	if (my ($u,$b) = 
+	    /pipstoreowner=([^\,]+)\,\s*o=([^\,]+)\,\s*o=piserverdb\s*/i) {
+# 	    print "converting $dn..\n".
+# 		"$u $b\n";
+	    
+	    for (@alt_people_domains) {
+		my ($lhs,$rhs) = split /\@/;
 
+#		print "comparing $u $lhs\n";
+		if ($u eq $lhs) {
+		    $d = $rhs;
+
+#		    my $o_dn = $dn;
+
+		    $dn =~ s/o=[^\,]+,/o=$d,/i;
+		}
+	    }
+
+	}
+    } else {
 	if (my ($u) = /dn:\s*uid=([^\,]+)\,/) {
 
-	    next if ($u eq "sean");
+	    #?
+	    # next if ($u eq "sean");
 
 	    for (@alt_people_domains) {
 		# print "$_\n";
 		my ($lhs,$rhs) = split /\@/;
 		# print "$lhs $rhs\n";
-	    
+		
 		if ($u eq $lhs) {
 		    $d = $rhs;
 		    print STDERR "changed domain, $lhs $d\n"
 		}
 	    }
-
 	} elsif (my ($g) = /dn:\s*cn=([^\,]+)\,/) {
 
 	    for (@alt_groups_domains) {
 		# print "$_\n";
 		my ($lhs,$rhs) = split /\@/;
 		# print "$lhs $rhs\n";
-	    
+		
 		if ($g eq $lhs) {
 		    $d = $rhs;
 		    print STDERR "changed domain, $lhs $d\n"
@@ -99,6 +121,8 @@ while(<>) {
 
 	} else {
 	    print "WARNING: $dn has neither uid or cn, ignoring.\n";
+	    print "entry:\n/$_/\n";
+	    exit
 	}
 
 	
@@ -107,9 +131,11 @@ while(<>) {
 	$dn =~ s/o=ext.domain.org,\s*o=ext.domain.org/o=${d},o=msu_ag/;
 
 	# print "dn: /$dn/\n";
-	    
+	
+
+#}
+    }
 	s/dn:[^\n]+\n//;
 	s/#[^\n]+\n//;
 	print "$dn\n$_\n\n";
-    }
 }
