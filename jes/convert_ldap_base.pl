@@ -92,7 +92,7 @@ while(<>) {
 	}
     } else {
 	if (my ($u) = /dn:\s*uid=([^\,]+)\,/) {
-
+	    # users
 	    #?
 	    # next if ($u eq "sean");
 
@@ -107,6 +107,7 @@ while(<>) {
 		}
 	    }
 	} elsif (my ($g) = /dn:\s*cn=([^\,]+)\,/) {
+	    # groups (aliases)
 
 	    for (@alt_groups_domains) {
 		# print "$_\n";
@@ -118,6 +119,9 @@ while(<>) {
 		    print STDERR "changed domain, $lhs $d\n"
 		}
 	    }
+
+	    s/memberurl:\s*ldap:\/\/\/o=ext.domain.org/memberurl: ldap:\/\/\/o=msu_ag/ig
+		if (/memberurl:\s*ldap/i);
 
 	} else {
 	    print "WARNING: $dn has neither uid or cn, ignoring.\n";
