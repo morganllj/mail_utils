@@ -42,7 +42,7 @@ my $zimbra_special =
                # perhaps.
 #    'ser|'.'mlehmann|gab|morgan|cferet|'.  
                # Steve, Matt, Gary, Feret and I
-    'sjones|aharris|'.        # Gary's test users
+#    'sjones|aharris|'.        # Gary's test users
     'hammy|spammy$';          # Spam training users 
 # run case fixing algorithm (fix_case()) on these attrs.
 #   Basically upcase after spaces and certain chars
@@ -61,7 +61,7 @@ my $max_recurse = 5;
 # it can be overridden on the command line.
 my $default_zimbra_svr = "dmail01.domain.org";
 # zimbra admin password
-my $default_zimbra_pass  = "pass";
+my $default_zimbra_pass  = 'pass';
 
 # default domain, used every time a user is created and in some cases
 # modified.  Can be overridden on the command line.
@@ -72,12 +72,14 @@ my $default_ldap_host    = "ldap0.domain.org";
 my $default_ldap_base    = "dc=domain,dc=org";
 my $default_ldap_bind_dn = "cn=Directory Manager";
 my $default_ldap_pass    = "pass";
+# good for testing/debugging:
 # my $default_ldap_filter = 
-#     "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
-# my $default_ldap_filter = "(|(orghomeorgcd=9500)(orghomeorgcd=8020))";
-#my $default_ldap_filter            = "(objectclass=posixAccount)";
+#    "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
+ my $default_ldap_filter = "(orghomeorgcd=9500)";
+#
+# poduction:
 my $default_ldap_filter            = 
-    "(objectclass=orgZimbraPerson)";
+   "(objectclass=orgZimbraPerson)";
 
 #### End Site-specific settings
 #############################################################
@@ -131,8 +133,11 @@ my $SOAP = $Soap::Soap12;
 # has ref to store a list of users added/modified to extra users can
 # be deleted from zimbra.
 my $all_users;
-
 my $subset;
+
+print "-n used, no changes will be made.\n"
+    if (exists $opts->{n});
+
 if (defined $subset_str) {
     for my $u (split /\s*,\s*/, $subset_str) {$subset->{lc $u} = 0;}
     print "\nlimiting to subset of users:\n", join (', ', keys %$subset), "\n";
@@ -195,7 +200,7 @@ for my $lusr ($rslt->entries) {
 }
 
 if (exists $opts->{e}) {
-    print "\ndelete phase..\n";
+    print "\ndelete phase, ",`date`;
     delete_not_in_ldap();
 } else {
     print "\ndelete phase skipped (enable with -e)\n";
@@ -246,7 +251,6 @@ sub add_user($) {
     my $r = $SOAP->invoke($url, $d->root(), $context)
 	if (!exists $opts->{n});
 
-
     if (exists $opts->{d} && !exists $opts->{n}) {
 	$o = $r->to_string("pretty");
 	$o =~ s/ns0\://g;
@@ -278,6 +282,10 @@ sub sync_user($$) {
 
 	# build the values from ldap using zimbra capitalization
 	$l_val_str = build_target_z_value($lu, $zattr);
+	if (!defined($l_val_str)) {
+	    print "$zattr is not defined, can't add user.  Aborting.\n";
+	    return;
+	}
 
 	# too much noise with a lot of users
         # if (exists $opts->{d}) {
@@ -293,9 +301,10 @@ sub sync_user($$) {
 		    "\tzimbra: $z_val_str\n";
 	    }
 
-	    # org hack!
+	    # zimbraMailHost 
 	    if ($zattr =~ /^\s*zimbramailhost\s*$/) {
-		print "zimbraMailHost difference found! Skipping:\n".
+		print "zimbraMailHost difference found for ",
+		(@{$zu->{uid}})[0], " Skipping.\n".
 		    "\tldap:   $l_val_str\n".
 		    "\tzimbra: $z_val_str\n";
 		next;
@@ -390,7 +399,7 @@ sub get_z2l() {
 		#		    "(", "orgoccupationalgroup", ")"],
 	"zimbramailhost" =>        ["placeholder.."], # fix this, also hacked in
 	                                              # build_target_z_value()
-        "zimbramailcanonicaladdress" => ["placeholder.."]  # fix this too. 
+        "zimbramailcanonicaladdress" => ["placeholder.."],  # fix this too. 
     };
 
 # A15 ULC-SHORT-NAME          /TELECOM & NTWRK/
@@ -401,11 +410,13 @@ sub get_z2l() {
 sub build_zmailhost($) {
     my $org_id = shift;
 
+    if (!defined $org_id) {
+	print "WARNING! undefined SDP id, zimbraMailHost will be undefined\n";
+	return undef;
+    }
+
     my @i = split //, $org_id;
-
     my $n = pop @i;
-
-
 
     # TODO: revisit!  Add provisions for dmail02 and unknown domain
     if ($zimbra_domain eq "domain.org") {
@@ -419,11 +430,24 @@ sub build_zmailhost($) {
 	    return "mail04.domain.org";
 	} elsif ($n =~ /^[89]{1}$/) {
 	    return "mail05.domain.org";
+	} else {
+	    print "WARNING! SDP id $org_id did not resolve to a valid ".
+		"zimbraMailHost.\n  This shouldn't be possible.. ".
+		"returning undef.";
+	    return undef;
 	}
     } elsif ($zimbra_domain eq "dev.domain.org") {
-	return "dmail01.domain.org";
+	if ($n =~ /^[0123456789]{1}$/) {
+	    return "dmail01.domain.org";
+	} else {
+	    print "WARNING! SDP id $org_id did not resolve to a valid ".
+		"zimbraMailHost.\n  This shouldn't be possible.. ".
+		"returning undef.";
+	    return undef;
+	}
     } else {
-	print "WARNING! returning undef mailhost!\n";
+	print "WARNING! zimbraMailHost will be undefined because domain ".
+	    "$zimbra_domain is not recognized.\n";
 	return undef;
     }
 }
@@ -543,7 +567,7 @@ sub build_target_z_value($$) {
 
     return $lu->get_value("uid") . "\@domain.org"
 	if ($zattr eq "zimbramailcanonicaladdress");
-    
+
     my $ret = join ' ', (
 	map {
     	    my @ldap_v;
@@ -597,7 +621,6 @@ sub delete_not_in_ldap() {
 	delete_in_range(undef, "a", "z");
 	return;
     }
-    
 
     if ($r->name ne "account") {
 	print "skipping delete, unknown record type returned: ", $r->name, "\n";
@@ -693,19 +716,30 @@ sub parse_and_del($) {
 #    my $children = $r->children();
 
     for my $child (@{$r->children()}) {
-	my ($uid, $z_id);
+	my ($uid, $mail, $z_id);
 
 	for my $attr (@{$child->children}) {
   	    if ((values %{$attr->attrs()})[0] eq "uid") {
   		$uid = $attr->content();
  	    }
+	    if ((values %{$attr->attrs()})[0] eq "mail") {
+  		$mail = $attr->content();
+ 	    }
   	    if ((values %{$attr->attrs()})[0] eq "zimbraId") {
   		$z_id = $attr->content();
   	    }
  	}
+
+
+
  	if (defined $uid && defined $z_id && 
-	    !exists $all_users->{$uid} && $uid !~ $zimbra_special) {
- 	    print "deleting $uid, $z_id..\n";
+	    !exists $all_users->{$uid} && $uid !~ $zimbra_special &&
+	    $mail !~ /archive$/) {
+
+	    if (defined $subset_str) { next unless exists ($subset->{$uid}); }
+
+ 	    #print "deleting $uid, $z_id..\n";
+ 	    print "deleting $mail, $z_id..\n";
 
  	    my $d = new XmlDoc;
  	    $d->start('DeleteAccountRequest', $MAILNS);
@@ -713,12 +747,70 @@ sub parse_and_del($) {
  	    $d->end();
 
  	    if (!exists $opts->{n}){
-#		my $r = $SOAP->invoke($url, $d->root(), $context);
+		my $r = $SOAP->invoke($url, $d->root(), $context);
 
 		if (exists $opts->{d}) {
 		    my $o = $r->to_string("pretty");
 		    $o =~ s/ns0\://g;
 		    print $o."\n";
+		}
+	    }
+
+
+# deleting the archive here is misdirected as it doesn't
+# catch orphaned archive accounts..
+
+# 	    # search out the archive account
+# 	    my $d2 = new XmlDoc;
+# 	    $d2->start('SearchDirectoryRequest', $MAILNS);
+# 	    $d2->add('query', $MAILNS, {"types" => "accounts"}, 
+# 		     "mail=${uid}*archive");
+# 	    $d2->end();
+
+# 	    my $r2 = $SOAP->invoke($url, $d2->root(), $context);
+
+# 	    for my $child (@{$r2->children()}) {
+# 		for my $attr (@{$child->children}) {
+# 		    if ((values %{$attr->attrs()})[0] eq "uid") {
+# 			$uid = $attr->content();
+# 		    }
+# 		    if ((values %{$attr->attrs()})[0] eq "mail") {
+# 			$mail = $attr->content();
+# 		    }
+# 		    if ((values %{$attr->attrs()})[0] eq "zimbraId") {
+# 			$z_id = $attr->content();
+# 		    }
+# 		}
+# 		print "\twould delete corresponding archive: $mail..\n";
+# 	    }
+
+	} elsif ($mail =~ /archive$/) {
+	    # extract the uid
+	    $mail =~ /^([^\-]+)\-/;
+	    my $archive_uid = $1;
+
+	    if (defined $subset_str) {
+		next unless exists ($subset->{$archive_uid});
+	    }
+
+	    if (!exists $all_users->{$archive_uid} && 
+		$archive_uid !~ $zimbra_special) {
+		
+		print "deleting archive $mail\n";
+
+		my $d = new XmlDoc;
+		$d->start('DeleteAccountRequest', $MAILNS);
+		$d->add('id', $MAILNS, undef, $z_id);
+		$d->end();
+		
+		if (!exists $opts->{n}){
+		    my $r = $SOAP->invoke($url, $d->root(), $context);
+		    
+		    if (exists $opts->{d}) {
+			my $o = $r->to_string("pretty");
+			$o =~ s/ns0\://g;
+			print $o."\n";
+		    }
 		}
 	    }
 	}
