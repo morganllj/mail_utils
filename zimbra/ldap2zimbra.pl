@@ -75,11 +75,10 @@ my $default_ldap_pass    = "pass";
 # good for testing/debugging:
 # my $default_ldap_filter = 
 #    "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
- my $default_ldap_filter = "(orghomeorgcd=9500)";
+# my $default_ldap_filter = "(orghomeorgcd=9500)";
 #
-# poduction:
-my $default_ldap_filter            = 
-   "(objectclass=orgZimbraPerson)";
+# production:
+ my $default_ldap_filter = "(objectclass=orgZimbraPerson)";
 
 #### End Site-specific settings
 #############################################################
@@ -167,12 +166,12 @@ my $sessionId = $authResponse->find_child('sessionId')->content;
 my $context = $SOAP->zimbraContext($authToken, $sessionId);
 
 # search users out of ldap
-print "searching out users $fil\n";
+print "getting user list from ldap: $fil\n";
 $rslt = $ldap->search(base => "$ldap_base", filter => $fil);
 $rslt->code && die "problem with search $fil: ".$rslt->error;
 
 # increment through users returned from ldap
-print "\nadd/modify phase..\n";
+print "\nadd/modify phase..", `date`;
 for my $lusr ($rslt->entries) {
     my $usr = lc $lusr->get_value("uid");
 
@@ -399,7 +398,8 @@ sub get_z2l() {
 		#		    "(", "orgoccupationalgroup", ")"],
 	"zimbramailhost" =>        ["placeholder.."], # fix this, also hacked in
 	                                              # build_target_z_value()
-        "zimbramailcanonicaladdress" => ["placeholder.."],  # fix this too. 
+#       "zimbramailcanonicaladdress" => ["placeholder.."]  # fix this too. 
+#	"zimbraarchiveaccount" => ["placeholder.."] # and this
     };
 
 # A15 ULC-SHORT-NAME          /TELECOM & NTWRK/
@@ -568,6 +568,13 @@ sub build_target_z_value($$) {
     return $lu->get_value("uid") . "\@domain.org"
 	if ($zattr eq "zimbramailcanonicaladdress");
 
+#     if ($zattr eq "zimbraarchiveaccount") {
+
+# 	my ($mday, $mon, $year) = localtime(time)[
+
+# 	    return $lu->get_value("uid"), "-", $year, $mon, $mday, "@dev.domain.org";
+#     }
+
     my $ret = join ' ', (
 	map {
     	    my @ldap_v;
@@ -729,8 +736,6 @@ sub parse_and_del($) {
   		$z_id = $attr->content();
   	    }
  	}
-
-
 
  	if (defined $uid && defined $z_id && 
 	    !exists $all_users->{$uid} && $uid !~ $zimbra_special &&
