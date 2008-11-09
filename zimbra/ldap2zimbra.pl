@@ -125,6 +125,11 @@ my $subset_str = $opts->{s};
 
 my $archive_domain = $zimbra_domain . ".archive";
 my $archive_mailhost = "dmail02.domain.org";
+# TODO: clean up cos handling!
+# prod:
+#my $archive_cos_id = "249ef618-29d0-465e-86ae-3eb407b65540";
+# dev:
+my $archive_cos_id = "c0806006-9813-4ff2-b0a9-667035376ece";
 
 my $fil = $default_ldap_filter;
 
@@ -231,6 +236,8 @@ sub add_user($) {
     $d->start('CreateAccountRequest', $MAILNS);
     $d->add('name', $MAILNS, undef, $lu->get_value("uid")."@".$zimbra_domain);
     for my $zattr (sort keys %$z2l) {
+	next if ($zattr =~ /zimbracosid/);
+	
 	my $v = build_target_z_value($lu, $zattr);
 	$d->add('a', $MAILNS, {"n" => $zattr}, $v);
     }
@@ -267,63 +274,6 @@ sub add_user($) {
     } else {
 	print "found existing archive account: ",$archive_acct_name,"\n";
     }
-
-
-
-
-
-
-
-
-# 	print "adding archive: ", build_archive_account($lu), "\n";
-# 	my $d3 = new XmlDoc;
-# 	$d3->start('CreateAccountRequest', $MAILNS);
-# 	$d3->add('name', $MAILNS, undef, build_archive_account($lu));
-
-
-# 	for my $zattr (sort keys %$z2l) {
-# 	    my $v = build_target_z_value($lu, $zattr);
-
-# 	    $v = $archive_mailhost
-# 		if ($zattr =~ /zimbramailhost/i);
-
-# 	    #print "archive provision, $zattr, $v\n";
-
-# 	    $d3->add('a', $MAILNS, {"n" => $zattr}, $v);
-# 	}
-# 	$d3->end();
-
-# 	my $o;
-# 	if (exists $opts->{d}) {
-# 	    print "here's what we're going to change:\n";
-# 	    $o = $d3->to_string("pretty")."\n";
-# 	    $o =~ s/ns0\://g;
-# 	    print $o."\n";
-# 	}
-
-# 	if (!exists $opts->{n}) {
-# #	my $r = $SOAP->invoke($url, $d->root(), $context)
-# 	    my $r3 = check_context_invoke($d3, \$context);
-
-# 	    if ($r3->name eq "Fault") {
-# 		print "problem adding user:\n";
-# 		print Dumper $r3;
-# 	    }
-
-# 	    if (exists $opts->{d} && !exists $opts->{n}) {
-# 		$o = $r3->to_string("pretty");
-# 		$o =~ s/ns0\://g;
-# 		print $o."\n";
-# 	    }
-# 	}
-
-#     }
-
-
-
-
-    
-
 }
 
 
@@ -377,6 +327,9 @@ sub find_and_apply_user_diffs {
     if (defined $zimbra_id) {
 	$syncing_archive_acct = 1;
 	$zu = get_z_user( (@{$zu->{zimbraarchiveaccount}})[0] );
+	my $archive_uid = (@{$zu->{uid}})[0];
+	print "adding $archive_uid to all_users..\n";
+	$all_users->{(@{$zu->{uid}})[0]};
     }
 
     $zimbra_id = (@{$zu->{zimbraid}})[0];
@@ -399,18 +352,25 @@ sub find_and_apply_user_diffs {
 	    $z_val_str = join (' ', sort @{$zu->{$zattr}});
 	}
 
+
 	if ($syncing_archive_acct && $zattr =~ /zimbramailhost/i) {
 	    $l_val_str = $archive_mailhost;
+	} elsif ($syncing_archive_acct && $zattr =~ /zimbracosid/i) {
+	    $l_val_str = $archive_cos_id;
 	} else {
 	    # build the values from ldap using zimbra capitalization
 	    $l_val_str = build_target_z_value($lu, $zattr);
 	}
 
-
 	if (!defined($l_val_str)) {
 	    print "$zattr is not defined, can't add user.  Aborting.\n";
 	    return;
 	}
+
+	# ignore archive attrs.. they take special consideration.
+	next 
+	    if ($zattr =~ /amavisarchivequarantineto/i ||
+		$zattr =~ /zimbraarchiveaccount/i);
 
 	if ($l_val_str ne $z_val_str) {
 	    if (exists $opts->{d}) {
@@ -418,23 +378,11 @@ sub find_and_apply_user_diffs {
 		    "\tldap:   $l_val_str\n".
 		    "\tzimbra: $z_val_str\n";
 	    }
-
-
-	    # ignore archive attrs.. they take special consideration.
-	    next 
-		if ($zattr =~ /amavisarchivequarantineto/i ||
-		    $zattr =~ /zimbraarchiveaccount/i);
 	    
 	    # zimbraMailHost 
 	    if ($zattr =~ /^\s*zimbramailhost\s*$/) {
 		print "zimbraMailHost diff found for ";
 		print "", (@{$zu->{mail}})[0];
-# 		if ($syncing_archive_acct) {
-# 		    print "", (@{$zu->{zimbraarchiveaccount}})[0];
-# 		} else {
-# 		    print "", (@{$zu->{uid}})[0];
-# 		}
-
 		print " Skipping.\n";
 		print "\tldap:   $l_val_str\n".
 		    "\tzimbra: $z_val_str\n";
@@ -535,7 +483,8 @@ sub get_z2l() {
 	                                              # build_target_z_value()
 #       "zimbramailcanonicaladdress" => ["placeholder.."]  # fix this too. 
 	"zimbraarchiveaccount" =>      ["placeholder.."], # and this
-	"amavisarchivequarantineto" => ["placeholder.."]  # this too.
+	"amavisarchivequarantineto" => ["placeholder.."],  # this too.
+	"zimbracosid"               => ["palceholder.."]
     };
 
 # A15 ULC-SHORT-NAME          /TELECOM & NTWRK/
@@ -753,53 +702,42 @@ sub build_target_z_value($$) {
 
 ######
 sub delete_not_in_ldap() {
-#    my $c = 0;
     my $r;
-#    do {
-	my $d = new XmlDoc;
-	$d->start('SearchDirectoryRequest', $MAILNS,
-		  {'sortBy' => "uid",
-		   'attrs'  => "uid",
-		   'types'  => "accounts"}
-	    ); 
-	{ $d->add('query', $MAILNS, { "types" => "accounts" });} 
-	$d->end();
+    my $d = new XmlDoc;
+    $d->start('SearchDirectoryRequest', $MAILNS,
+	      {'sortBy' => "uid",
+	       'attrs'  => "uid",
+	       'types'  => "accounts"}
+	); 
+    { $d->add('query', $MAILNS, { "types" => "accounts" });} 
+    $d->end();
 
-	$r = check_context_invoke($d, \$context);
+    $r = check_context_invoke($d, \$context);
 
-	if ($r->name eq "Fault") {
-	    my $rsn = get_fault_reason($r);
+    if ($r->name eq "Fault") {
+	my $rsn = get_fault_reason($r);
 
-# 	    # break down the search by alpha/numeric if reason is 
-# 	    #    account.TOO_MANY_SEARCH_RESULTS
- 	    if (defined $rsn && $rsn eq "account.TOO_MANY_SEARCH_RESULTS") {
- 		print "\tfault due to $rsn\n";
- 		print "\trecursing deeper to return fewer results.\n";
-		
- 		delete_in_range(undef, "a", "z");
- 		return;
-	    }
-# 	    } elsif (defined $rsn && $rsn =~ /AUTH_EXPIRED/) {
-# 		# authentication timed out, re-authenticate and re-try the search
-# 		print "\tfault due to $rsn\n";
-# 		print "\tre-authenticating..\n";
-
-		
-# 	    }
-
-	    if ($r->name ne "account") {
-		print "skipping delete, unknown record type returned: ", 
-		    $r->name, "\n";
-		return;
-	    }
-
-	    print "returned ", $r->num_children, " children\n";
-
-	    parse_and_del($r);
-
-#	    $c++;
+	# break down the search by alpha/numeric if reason is 
+	#    account.TOO_MANY_SEARCH_RESULTS
+	if (defined $rsn && $rsn eq "account.TOO_MANY_SEARCH_RESULTS") {
+	    print "\tfault due to $rsn\n";
+	    print "\trecursing deeper to return fewer results.\n";
+	    
+	    delete_in_range(undef, "a", "z");
+	    return;
 	}
-#    } until ($c > 2 || $r->name ne "Fault")  # try twice..
+
+	if ($r->name ne "account") {
+	    print "skipping delete, unknown record type returned: ", 
+	    $r->name, "\n";
+	    return;
+	}
+
+	print "returned ", $r->num_children, " children\n";
+
+	parse_and_del($r);
+
+    }
 }
 
 
@@ -818,13 +756,13 @@ sub check_context_invoke {
 	    # authentication timed out, re-authenticate and re-try the invoke
 	    print "\tfault due to $rsn\n";
 	    print "\tre-authenticating..\n";
-	    #print Dumper ($r);
 	    $$context_ref = get_zimbra_context();
 	    $r = $SOAP->invoke($url, $d->root(), $$context_ref);
 	    if ($r->name eq "Fault") {
 		$rsn = get_fault_reason($r);
 		if (defined $rsn && $rsn =~ /AUTH_EXPIRED/) {
-		    print "got $rsn *again* ... this shouldn't happen, exiting.\n";
+		    print "got $rsn *again* ... ".
+			"this shouldn't happen, exiting.\n";
 		    print Dumper($r);
 		    exit;
 		} else {
@@ -919,8 +857,6 @@ sub parse_and_del($) {
 
     my $r = shift;
 
-#    my $children = $r->children();
-
     for my $child (@{$r->children()}) {
 	my ($uid, $mail, $z_id);
 
@@ -944,8 +880,9 @@ sub parse_and_del($) {
 	}
 
  	if (defined $uid && defined $z_id && 
-	    !exists $all_users->{$uid} && $uid !~ $zimbra_special &&
-	    $mail !~ /archive$/) {
+	    !exists $all_users->{$uid} && $uid !~ $zimbra_special 
+#	    && $mail !~ /archive$/) {
+	    ) {
 
 	    if (defined $subset_str) { next unless exists ($subset->{$uid}); }
 
@@ -997,39 +934,39 @@ sub parse_and_del($) {
 # 		print "\twould delete corresponding archive: $mail..\n";
 # 	    }
 
-	} elsif ($mail =~ /archive$/) {
- 	    # extract the uid
- 	    $mail =~ /^([^\\@]+)\@/;
- 	    my $archive_uid = $1;
+	}# elsif ($mail =~ /archive$/) {
+#  	    # extract the uid
+#  	    $mail =~ /^([^\\@]+)\@/;
+#  	    my $archive_uid = $1;
 
-	    if (defined $subset_str) {
-		next unless exists ($subset->{$archive_uid});
-	    }
+# 	    if (defined $subset_str) {
+# 		next unless exists ($subset->{$archive_uid});
+# 	    }
 
 
 
-	    if (!exists $all_users->{$archive_uid} && 
-		$archive_uid !~ $zimbra_special) {
+# 	    if (!exists $all_users->{$archive_uid} && 
+# 		$archive_uid !~ $zimbra_special) {
 		
-		print "deleting archive $mail\n";
+# 		print "deleting archive $mail\n";
 
-		my $d = new XmlDoc;
-		$d->start('DeleteAccountRequest', $MAILNS);
-		$d->add('id', $MAILNS, undef, $z_id);
-		$d->end();
+# 		my $d = new XmlDoc;
+# 		$d->start('DeleteAccountRequest', $MAILNS);
+# 		$d->add('id', $MAILNS, undef, $z_id);
+# 		$d->end();
 		
-		if (!exists $opts->{n}){
-		    #my $r = $SOAP->invoke($url, $d->root(), $context);
-		    my $r = check_context_invoke($d, \$context);
+# 		if (!exists $opts->{n}){
+# 		    #my $r = $SOAP->invoke($url, $d->root(), $context);
+# 		    my $r = check_context_invoke($d, \$context);
 		    
-		    if (exists $opts->{d}) {
-			my $o = $r->to_string("pretty");
-			$o =~ s/ns0\://g;
-			print $o."\n";
-		    }
-		}
-	    }
-	}
+# 		    if (exists $opts->{d}) {
+# 			my $o = $r->to_string("pretty");
+# 			$o =~ s/ns0\://g;
+# 			print $o."\n";
+# 		    }
+# 		}
+# 	    }
+#	}
     }
 }
     
@@ -1123,6 +1060,7 @@ sub add_archive_acct {
     my $z2l = get_z2l();
 
     print "adding archive: ", build_archive_account($lu), "\n";
+    $all_users->{(split /\@/, build_archive_account($lu))[0]} = 1;
     my $d3 = new XmlDoc;
     $d3->start('CreateAccountRequest', $MAILNS);
     $d3->add('name', $MAILNS, undef, build_archive_account($lu));
@@ -1133,6 +1071,8 @@ sub add_archive_acct {
 	my $v;
 	if ($zattr =~ /zimbramailhost/i) {
 	    $v = $archive_mailhost;
+	} elsif ($zattr =~ /zimbracosid/) {
+	    $v = $archive_cos_id;
 	} else {
 	    $v = build_target_z_value($lu, $zattr);
 	}
