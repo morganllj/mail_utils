@@ -100,12 +100,12 @@ use Soap;
 $|=1;
 
 sub print_usage();
-sub get_z2l();
+#sub get_z2l();
 sub add_user($);
 sub sync_user($$);
 sub get_z_user($);
 sub fix_case($);
-sub build_target_z_value($$);
+sub build_target_z_value($$$);
 sub delete_not_in_ldap();
 sub delete_in_range($$$);
 sub parse_and_del($);
@@ -214,6 +214,7 @@ if (exists $opts->{e}) {
 $rslt = $ldap->unbind;
 
 print "finished at ", `date`;
+print "\n";
 
 
 
@@ -227,7 +228,7 @@ sub add_user($) {
     my $z2l = get_z2l();
 
     # org hack
-    unless (defined build_target_z_value($lu, "orgghrsintemplidno")) {
+    unless (defined build_target_z_value($lu, "orgghrsintemplidno", $z2l)) {
 	print "\t***no orgghrsintemplidno, not adding.\n";
 	return;
     }
@@ -236,9 +237,9 @@ sub add_user($) {
     $d->start('CreateAccountRequest', $MAILNS);
     $d->add('name', $MAILNS, undef, $lu->get_value("uid")."@".$zimbra_domain);
     for my $zattr (sort keys %$z2l) {
-	next if ($zattr =~ /zimbracosid/);
+	#next if ($zattr =~ /zimbracosid/);
 	
-	my $v = build_target_z_value($lu, $zattr);
+	my $v = build_target_z_value($lu, $zattr, $z2l);
 	$d->add('a', $MAILNS, {"n" => $zattr}, $v);
     }
     $d->end();
@@ -282,7 +283,7 @@ sub build_archive_account {
     my ($lu, $zu) = @_;
 
     if (defined $zu &&
- 	defined ((@{$zu->{zimbraarchiveaccount}})[0])) {
+ 	exists $zu->{zimbraarchiveaccount}) {
  	return (@{$zu->{zimbraarchiveaccount}})[0];
     }
 
@@ -308,7 +309,6 @@ sub sync_user($$) {
 #	archive_acct_exists(build_archive_account($lu), $lu, $zu);
 	archive_acct_exists(build_archive_account($lu, $zu), $lu);
     if (!$archive_acct_name) {
-	print "adding archive in sync_user..\n";
 	add_archive_acct($lu);
     } else {
 	find_and_apply_user_diffs($zu, $lu, $z_id);
@@ -323,18 +323,20 @@ sub sync_user($$) {
 sub find_and_apply_user_diffs {
     my ($zu, $lu, $zimbra_id) = @_;
 
+    my $z2l;
     my $syncing_archive_acct = 0;
     if (defined $zimbra_id) {
 	$syncing_archive_acct = 1;
 	$zu = get_z_user( (@{$zu->{zimbraarchiveaccount}})[0] );
-	my $archive_uid = (@{$zu->{uid}})[0];
-	print "adding $archive_uid to all_users..\n";
-	$all_users->{(@{$zu->{uid}})[0]};
+	$all_users->{(@{$zu->{uid}})[0]} = 1;
+	my $z2l = get_z2l("archive");
+    } else {
+	my $z2l = get_z2l();
     }
 
     $zimbra_id = (@{$zu->{zimbraid}})[0];
 
-    my $z2l = get_z2l();
+#    my $z2l = get_z2l();
     my $d = new XmlDoc();
     $d->start('ModifyAccountRequest', $MAILNS);
 #    $d->add('id', $MAILNS, undef, (@{$zu->{zimbraid}})[0]);
@@ -353,14 +355,17 @@ sub find_and_apply_user_diffs {
 	}
 
 
-	if ($syncing_archive_acct && $zattr =~ /zimbramailhost/i) {
-	    $l_val_str = $archive_mailhost;
-	} elsif ($syncing_archive_acct && $zattr =~ /zimbracosid/i) {
-	    $l_val_str = $archive_cos_id;
-	} else {
-	    # build the values from ldap using zimbra capitalization
-	    $l_val_str = build_target_z_value($lu, $zattr);
-	}
+# 	if ($syncing_archive_acct && $zattr =~ /zimbramailhost/i) {
+# 	    $l_val_str = $archive_mailhost;
+# 	} elsif ($syncing_archive_acct && $zattr =~ /zimbracosid/i) {
+# 	    $l_val_str = $archive_cos_id;
+# 	} else {
+# 	    # build the values from ldap using zimbra capitalization
+# 	    $l_val_str = build_target_z_value($lu, $zattr);
+# 	}
+
+	# build the values from ldap using zimbra capitalization
+	$l_val_str = build_target_z_value($lu, $zattr, $z2l);
 
 	if (!defined($l_val_str)) {
 	    print "$zattr is not defined, can't add user.  Aborting.\n";
@@ -399,10 +404,7 @@ sub find_and_apply_user_diffs {
 
     if ($diff_found) {
 
-# 	print "\nsyncing ", $lu->get_value("uid"), ", ",
-#             $lu->get_value("cn"),"\n";
 	print "\nsyncing ", (@{$zu->{mail}})[0], "\n";
-
 
 	my $o;
 	print "changes:\n";
@@ -462,6 +464,7 @@ sub print_usage() {
 
 #######
 sub get_z2l() {
+    my $type = shift;
     # left  (lhs): zimbra ldap attribute
     # right (rhs): corresponding enterprise ldap attribute.
     # 
@@ -472,20 +475,57 @@ sub get_z2l() {
     # You can use literals (like '(' or ')') but you need to identify
     # them in @z2l_literals at the top of the script.
 
-    return {
-	"cn" =>                    ["cn"],
-	"zimbrapreffromdisplay" => ["givenname", "sn"],
-        "givenname" =>             ["givenname"],
-	"sn" =>                    ["sn"],
-	"displayname" =>           ["givenname", "sn"],
-		#		    "(", "orgoccupationalgroup", ")"],
-	"zimbramailhost" =>        ["placeholder.."], # fix this, also hacked in
-	                                              # build_target_z_value()
-#       "zimbramailcanonicaladdress" => ["placeholder.."]  # fix this too. 
-	"zimbraarchiveaccount" =>      ["placeholder.."], # and this
-	"amavisarchivequarantineto" => ["placeholder.."],  # this too.
-	"zimbracosid"               => ["palceholder.."]
-    };
+#     return {
+# 	"cn" =>                    ["cn"],
+# 	"zimbrapreffromdisplay" => ["givenname", "sn"],
+#         "givenname" =>             ["givenname"],
+# 	"sn" =>                    ["sn"],
+# 	"displayname" =>           ["givenname", "sn"],
+# 		#		    "(", "orgoccupationalgroup", ")"],
+# 	"zimbramailhost" =>        ["placeholder.."], # fix this, also hacked in
+# 	                                              # build_target_z_value()
+# #       "zimbramailcanonicaladdress" => ["placeholder.."]  # fix this too. 
+# 	"zimbraarchiveaccount" =>      ["placeholder.."], # and this
+# 	"amavisarchivequarantineto" => ["placeholder.."],  # this too.
+# 	"zimbracosid"               => ["palceholder.."]
+#     };
+
+    
+    # anything marked "placeholder" should get special handing in
+    # build_target_z_value()
+    my $z2l;
+    if (defined $type && $type eq "archive") {
+	$z2l = {
+	    "displayname" =>           ["givenname", "sn"],
+	    #		    "(", "orgoccupationalgroup", ")"],
+	    "zimbramailhost" =>        $archive_mailhost,
+	    #       "zimbramailcanonicaladdress" => ["placeholder.."]
+	    "zimbraarchiveaccount" =>      ["placeholder.."],
+	    "amavisarchivequarantineto" => ["placeholder.."],
+	    "zimbracosid"               => $archive_cos_id
+	};
+    } elsif (defined $type) {
+	die "unknown type $type received in get_z2l.. ";
+    } else {
+	$z2l = {
+	    "cn" =>                    ["cn"],
+	    "zimbrapreffromdisplay" => ["givenname", "sn"],
+	    "givenname" =>             ["givenname"],
+	    "sn" =>                    ["sn"],
+	    "displayname" =>           ["givenname", "sn"],
+	    #		    "(", "orgoccupationalgroup", ")"],
+	    "zimbramailhost" =>        ["placeholder.."],
+	    # build_target_z_value()
+	    #       "zimbramailcanonicaladdress" => ["placeholder.."]
+	    "zimbraarchiveaccount" =>      ["placeholder.."],
+	    "amavisarchivequarantineto" => ["placeholder.."],
+	    "zimbracosid"               => ["palceholder.."]
+	};
+    }
+
+    return $z2l;
+
+
 
 # A15 ULC-SHORT-NAME          /TELECOM & NTWRK/
 #  Telecom & Ntwrk
@@ -649,12 +689,10 @@ sub fix_case($) {
 
 
 ######
-#sub build_target_z_value($$) {
-#    my ($type, $lu, $zattr) = @_;
-sub build_target_z_value($$) {
-    my ($lu, $zattr) = @_;
+sub build_target_z_value($$$) {
+    my ($lu, $zattr, $z2l) = @_;
     
-    my $z2l = get_z2l();
+#    my $z2l = get_z2l();
 
     # hacks to get through a deadline
     return build_zmailhost($lu->get_value("orgghrsintemplidno"))
@@ -688,7 +726,7 @@ sub build_target_z_value($$) {
 	} @{$z2l->{$zattr}}   # get the ldap side of z2l hash
     );
 
-    # special case rule to remove space before after open parentheses
+    # special case rule to remove space before and after open parentheses
     # and after close parentheses.  I don't think there's a better
     # way/place to do this.
     $ret =~ s/\(\s+/\(/;
@@ -887,7 +925,8 @@ sub parse_and_del($) {
 	    if (defined $subset_str) { next unless exists ($subset->{$uid}); }
 
  	    #print "deleting $uid, $z_id..\n";
- 	    print "deleting $mail, $z_id..\n";
+ 	    #print "deleting $mail, $z_id..\n";
+	    print "deleting $mail..\n";
 
  	    my $d = new XmlDoc;
  	    $d->start('DeleteAccountRequest', $MAILNS);
@@ -1059,7 +1098,8 @@ sub add_archive_acct {
 
     my $z2l = get_z2l();
 
-    print "adding archive: ", build_archive_account($lu), "\n";
+    print "adding archive: ", build_archive_account($lu), 
+        " for ", $lu->get_value("uid"), "\n";
     $all_users->{(split /\@/, build_archive_account($lu))[0]} = 1;
     my $d3 = new XmlDoc;
     $d3->start('CreateAccountRequest', $MAILNS);
@@ -1069,13 +1109,14 @@ sub add_archive_acct {
     for my $zattr (sort keys %$z2l) {
 
 	my $v;
-	if ($zattr =~ /zimbramailhost/i) {
-	    $v = $archive_mailhost;
-	} elsif ($zattr =~ /zimbracosid/) {
-	    $v = $archive_cos_id;
-	} else {
-	    $v = build_target_z_value($lu, $zattr);
-	}
+# 	if ($zattr =~ /zimbramailhost/i) {
+# 	    $v = $archive_mailhost;
+# 	} elsif ($zattr =~ /zimbracosid/) {
+# 	    $v = $archive_cos_id;
+# 	} else {
+# 	    $v = build_target_z_value($lu, $zattr, $z2l);
+# 	}
+	$v = build_target_z_value($lu, $zattr, $z2l);
 
 	#print "archive provision, $zattr, $v\n";
 
