@@ -47,6 +47,7 @@ my $zimbra_special =
                # Steve, Matt, Gary, Feret and I
     'calendar-admin|'.        # org calendar admin user
     'noreply|'.               # noreply: used as from address in broadcast msgs.
+    'besadmin|'.
     'hammy|spammy$';          # Spam training users 
 # run case fixing algorithm (fix_case()) on these attrs.
 #   Basically upcase after spaces and certain chars
@@ -61,6 +62,9 @@ my @z2l_literals = qw/( )/;
 # 5 == aaaaa*
 my $max_recurse = 5;
 
+
+
+
 # hostname for zimbra store.  It can be any of your stores.
 # it can be overridden on the command line.
 my $default_zimbra_svr = "dmail01.domain.org";
@@ -71,11 +75,23 @@ my $default_zimbra_pass  = 'pass';
 # modified.  Can be overridden on the command line.
 my $default_domain       = "dev.domain.org";
 
+my $archive_mailhost = "dmail02.domain.org";
+
+# TODO: clean up cos handling!
+# prod:
+#my $archive_cos_id = "249ef618-29d0-465e-86ae-3eb407b65540";
+# dev:
+my $archive_cos_id = "c0806006-9813-4ff2-b0a9-667035376ece";
+
+
+
+
+
 # default ldap settings, can be overridden on the command line
 my $default_ldap_host    = "ldap0.domain.org";
 my $default_ldap_base    = "dc=domain,dc=org";
 my $default_ldap_bind_dn = "cn=Directory Manager";
-my $default_ldap_pass    = "UoTM3rd";
+my $default_ldap_pass    = "pass";
 # good for testing/debugging:
 # my $default_ldap_filter = 
 #    "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
@@ -124,12 +140,13 @@ my $zimbra_pass = $opts->{p}   || $default_zimbra_pass;
 my $subset_str = $opts->{s};
 
 my $archive_domain = $zimbra_domain . ".archive";
-my $archive_mailhost = "dmail02.domain.org";
-# TODO: clean up cos handling!
-# prod:
-#my $archive_cos_id = "249ef618-29d0-465e-86ae-3eb407b65540";
-# dev:
-my $archive_cos_id = "c0806006-9813-4ff2-b0a9-667035376ece";
+
+
+
+
+
+
+
 
 my $fil = $default_ldap_filter;
 
@@ -178,8 +195,6 @@ for my $lusr ($rslt->entries) {
     my $usr = lc $lusr->get_value("uid");
 
     if (defined $subset_str) { next unless exists ($subset->{$usr}); }
-
-    print "\nworking on $usr..\n" if exists $opts->{d};
 
     $all_users->{$usr} = 1;
 
@@ -268,52 +283,135 @@ sub add_user($) {
 	}
     }
 
-    my $archive_acct_name;
-    if (! ($archive_acct_name = 
-	   (archive_acct_exists(build_archive_account($lu), $lu))[0])) {
-	add_archive_acct($lu);
+    # The user is newly created so does not have a legacy archive account..
+    # get the archive name
+    my $archive_acct_name = build_archive_account($lu);
+
+    if (!defined(get_archive_account_id($archive_acct_name))) {
+	# if the archive doesn't exist add it.
+ 	add_archive_acct($lu);
     } else {
+	# if the archive exists do nothing.
 	print "found existing archive account: ",$archive_acct_name,"\n";
     }
 }
 
 
 
-sub build_archive_account {
-    my ($lu, $zu) = @_;
+# sub build_archive_account {
+#     my ($lu, $zu) = @_;
+
+#     if (defined $zu &&
+#  	exists $zu->{zimbraarchiveaccount}) {
+# 	print "returning archive account: ", 
+# 	    join (',', @{$zu->{zimbraarchiveaccount}}), "\n";
+# # 	return (@{$zu->{zimbraarchiveaccount}})[0];
+#  	return @{$zu->{zimbraarchiveaccount}};
+#     }
+
+#     return $lu->get_value("orgghrsintemplidno")."\@".$archive_domain;
+# }
+
+
+# get an active acount account from a user account
+sub get_archive_account {
+    my ($zu) = @_;
 
     if (defined $zu &&
  	exists $zu->{zimbraarchiveaccount}) {
- 	return (@{$zu->{zimbraarchiveaccount}})[0];
+
+	my $acct_name;
+
+	for $acct_name (@{$zu->{zimbraarchiveaccount}}) {
+	    # check for archive account
+	    my $d2 = new XmlDoc;
+	    $d2->start('GetAccountRequest', $MAILNS); 
+	    $d2->add('account', $MAILNS, { "by" => "name" }, 
+		     #build_archive_account($lu));
+		     $acct_name);
+	    $d2->end();
+	    
+	    my $r2 = check_context_invoke($d2, \$context);
+
+	    if ($r2->name eq "Fault") {
+		my $rsn = get_fault_reason($r2);
+		if ($rsn ne "account.NO_SUCH_ACCOUNT") {
+		    print "problem searching out archive $acct_name\n";
+		    print Dumper($r2);
+		    return;
+		}
+	    }
+
+	    my $mc = $r2->find_child('account');
+
+	    if (defined $mc) {
+		#return ($mc->attrs->{name}, $mc->attrs->{id});
+		return ($mc->attrs->{name});
+	    }
+	}
     }
+    return undef;
+}
+
+
+# build a new archive account from $lu
+sub build_archive_account($) {
+    my $lu = shift;
 
     return $lu->get_value("orgghrsintemplidno")."\@".$archive_domain;
 }
 
+sub get_archive_account_id($) {
+    my $a = shift;
 
+    my $d2 = new XmlDoc;
+    $d2->start('GetAccountRequest', $MAILNS); 
+    $d2->add('account', $MAILNS, { "by" => "name" }, $a);
+    $d2->end();
+    
+    my $r2 = check_context_invoke($d2, \$context);
 
+    if ($r2->name eq "Fault") {
+	my $rsn = get_fault_reason($r2);
+	if ($rsn ne "account.NO_SUCH_ACCOUNT") {
+	    print "problem searching out archive $a\n";
+	    print Dumper($r2);
+	    return;
+	}
+    }
+
+    my $mc = $r2->find_child('account');
+
+    if (defined $mc) {
+# 	print "found archive account id: ", $mc->attrs->{name}, 
+# 	    " ", $mc->attrs->{id}, "\n";
+	return $mc->attrs->{id};
+    }
+	
+    return undef;
+}
 
 ######
 sub sync_user($$) {
     my ($zu, $lu) = @_;
 
-    # get the archive account.
-
-    # if the archive account exists apply the same changes to the
-    # archive account as to the primary account.
-    # if the archive account doesn't exist add it.
-
+    # sync user
     find_and_apply_user_diffs($zu, $lu);
+
+    # get the archive account. This will return undef if the archive in
+    # the user account doesn't exist.
+    my $archive_acct_name = get_archive_account($zu);    
     
-    my ($archive_acct_name, $z_id) = 
-#	archive_acct_exists(build_archive_account($lu), $lu, $zu);
-	archive_acct_exists(build_archive_account($lu, $zu), $lu);
-    if (!$archive_acct_name) {
-	add_archive_acct($lu);
+    if (!defined ($archive_acct_name)) {
+	if (!defined(get_archive_account_id(build_archive_account($lu)))) {
+	    # the archive account in the user does not exist.
+	    add_archive_acct($lu);
+	}
     } else {
+	# the archive account does exist, get its id and sync it
+	my $z_id = get_archive_account_id($archive_acct_name);
 	find_and_apply_user_diffs($zu, $lu, $z_id);
     }
-
 }
 
 
@@ -325,13 +423,15 @@ sub find_and_apply_user_diffs {
 
     my $z2l;
     my $syncing_archive_acct = 0;
+
     if (defined $zimbra_id) {
+	# we're syncing an archive account..
 	$syncing_archive_acct = 1;
-	$zu = get_z_user( (@{$zu->{zimbraarchiveaccount}})[0] );
+	$zu = get_z_user(get_archive_account($zu));
 	$all_users->{(@{$zu->{uid}})[0]} = 1;
-	my $z2l = get_z2l("archive");
+	$z2l = get_z2l("archive");
     } else {
-	my $z2l = get_z2l();
+	$z2l = get_z2l();
     }
 
     $zimbra_id = (@{$zu->{zimbraid}})[0];
@@ -354,29 +454,34 @@ sub find_and_apply_user_diffs {
 	    $z_val_str = join (' ', sort @{$zu->{$zattr}});
 	}
 
-
-# 	if ($syncing_archive_acct && $zattr =~ /zimbramailhost/i) {
-# 	    $l_val_str = $archive_mailhost;
-# 	} elsif ($syncing_archive_acct && $zattr =~ /zimbracosid/i) {
-# 	    $l_val_str = $archive_cos_id;
-# 	} else {
-# 	    # build the values from ldap using zimbra capitalization
-# 	    $l_val_str = build_target_z_value($lu, $zattr);
-# 	}
-
-	# build the values from ldap using zimbra capitalization
-	$l_val_str = build_target_z_value($lu, $zattr, $z2l);
+	if ($syncing_archive_acct && $zattr eq "zimbramailhost") {
+	    $l_val_str = $archive_mailhost;
+	} else {
+	    # build the values from ldap using zimbra capitalization
+	    $l_val_str = build_target_z_value($lu, $zattr, $z2l);
+	}
 
 	if (!defined($l_val_str)) {
 	    print "$zattr is not defined, can't add user.  Aborting.\n";
 	    return;
 	}
 
-	# ignore archive attrs.. they take special consideration.
-	next 
-	    if ($zattr =~ /amavisarchivequarantineto/i ||
-		$zattr =~ /zimbraarchiveaccount/i);
+ 	if (($zattr =~ /amavisarchivequarantineto/i ||
+ 	    $zattr =~ /zimbraarchiveaccount/i) && 
+	    !$syncing_archive_acct) {
 
+ 	    # set the archive acct attrs if the archive account exists
+ 	    # and is tied to the user.
+ 	    # if we don't set it here it will be set by
+ 	    # build_target_z_value above
+ 	    my $acct = get_archive_account($zu);
+ 	    if (defined $acct) {
+ 		$l_val_str = $acct;
+ 	    }
+	} else {
+	    next
+	}
+	
 	if ($l_val_str ne $z_val_str) {
 	    if (exists $opts->{d}) {
 		print "different values for $zattr:\n".
@@ -463,7 +568,7 @@ sub print_usage() {
 
 
 #######
-sub get_z2l() {
+sub get_z2l($) {
     my $type = shift;
     # left  (lhs): zimbra ldap attribute
     # right (rhs): corresponding enterprise ldap attribute.
@@ -495,14 +600,15 @@ sub get_z2l() {
     # build_target_z_value()
     my $z2l;
     if (defined $type && $type eq "archive") {
+	# TODO: build_target_z_value can't handle literals..
 	$z2l = {
 	    "displayname" =>           ["givenname", "sn"],
 	    #		    "(", "orgoccupationalgroup", ")"],
-	    "zimbramailhost" =>        $archive_mailhost,
+	    "zimbramailhost" =>        ["placeholder.."],
 	    #       "zimbramailcanonicaladdress" => ["placeholder.."]
 	    "zimbraarchiveaccount" =>      ["placeholder.."],
 	    "amavisarchivequarantineto" => ["placeholder.."],
-	    "zimbracosid"               => $archive_cos_id
+	    "zimbracosid"               => ["placeholder.."]
 	};
     } elsif (defined $type) {
 	die "unknown type $type received in get_z2l.. ";
@@ -519,7 +625,7 @@ sub get_z2l() {
 	    #       "zimbramailcanonicaladdress" => ["placeholder.."]
 	    "zimbraarchiveaccount" =>      ["placeholder.."],
 	    "amavisarchivequarantineto" => ["placeholder.."],
-	    "zimbracosid"               => ["palceholder.."]
+#	    "zimbracosid"               => ["palceholder.."]
 	};
     }
 
@@ -691,8 +797,6 @@ sub fix_case($) {
 ######
 sub build_target_z_value($$$) {
     my ($lu, $zattr, $z2l) = @_;
-    
-#    my $z2l = get_z2l();
 
     # hacks to get through a deadline
     return build_zmailhost($lu->get_value("orgghrsintemplidno"))
@@ -704,6 +808,10 @@ sub build_target_z_value($$$) {
     return build_archive_account($lu)
 	if (($zattr eq "zimbraarchiveaccount") ||
 	    ($zattr eq "amavisarchivequarantineto"));
+
+    return $archive_cos_id if ($zattr eq "zimbracosid");
+    
+#    return $archive_mailhost if ($zattr eq "zimbramailhost");
 
     my $ret = join ' ', (
 	map {
@@ -771,7 +879,7 @@ sub delete_not_in_ldap() {
 	    return;
 	}
 
-	print "returned ", $r->num_children, " children\n";
+	#print "returned ", $r->num_children, " children\n";
 
 	parse_and_del($r);
 
@@ -792,7 +900,7 @@ sub check_context_invoke {
 	my $rsn = get_fault_reason($r);
 	if (defined $rsn && $rsn =~ /AUTH_EXPIRED/) {
 	    # authentication timed out, re-authenticate and re-try the invoke
-	    print "\tfault due to $rsn\n";
+	    print "\tfault due to $rsn at ", `date`;
 	    print "\tre-authenticating..\n";
 	    $$context_ref = get_zimbra_context();
 	    $r = $SOAP->invoke($url, $d->root(), $$context_ref);
@@ -1048,7 +1156,9 @@ sub get_zimbra_context {
 
 
 sub archive_acct_exists {
-    my ($acct_name, $lu, $zu) = shift;
+#    my ($acct_name, $lu, $zu) = shift;
+#    my $acct_name = shift;
+    my @accts = @_;
 
 #     # if an archive account is defined in the user entry use that.
 #     # otherwise use the generated value that was passed in as $acct_name
@@ -1057,35 +1167,40 @@ sub archive_acct_exists {
 # 	$acct_name = (@{$zu->{zimbraarchiveaccount}})[0];
 #     }
     
-    # check for and if appropriate create archive account
-    my $d2 = new XmlDoc;
-    $d2->start('GetAccountRequest', $MAILNS); 
-    $d2->add('account', $MAILNS, { "by" => "name" }, 
-	     #build_archive_account($lu));
-	     $acct_name);
-    $d2->end();
-    
-    my $r2 = check_context_invoke($d2, \$context);
+    for my $acct_name (@accts) {
+	# check for and if appropriate create archive account
+	my $d2 = new XmlDoc;
+	$d2->start('GetAccountRequest', $MAILNS); 
+	$d2->add('account', $MAILNS, { "by" => "name" }, 
+		 #build_archive_account($lu));
+		 $acct_name);
+	$d2->end();
+	
+	my $r2 = check_context_invoke($d2, \$context);
 
-    if ($r2->name eq "Fault") {
-	my $rsn = get_fault_reason($r2);
-	if ($rsn ne "account.NO_SUCH_ACCOUNT") {
-	    print "problem searching out archive ", 
-	        build_archive_account($lu, $zu),
-	        " for ", $lu->get_value("uid")."@".$zimbra_domain, ":\n";
-	    print Dumper($r2);
-	    return;
+	if ($r2->name eq "Fault") {
+	    my $rsn = get_fault_reason($r2);
+	    if ($rsn ne "account.NO_SUCH_ACCOUNT") {
+		print "problem searching out archive $acct_name\n";
+# 	    print "problem searching out archive ", 
+# 	        build_archive_account($lu, $zu),
+# 	        " for ", $lu->get_value("uid")."@".$zimbra_domain, ":\n";
+		print Dumper($r2);
+		return;
+	    }
+	}
+
+	my $mc = $r2->find_child('account');
+
+	if (defined $mc) {
+# 	    print "found archive account: ", $mc->attrs->{name}, "\n"
+# 		if (exists ($opts->{d}));
+
+	    return ($mc->attrs->{name}, $mc->attrs->{id});
 	}
     }
 
-    my $mc = $r2->find_child('account');
-
-    if (defined $mc) {
-	print "found archive account: ", $mc->attrs->{name}, "\n"
-	    if (exists ($opts->{d}));
-
-	return ($mc->attrs->{name}, $mc->attrs->{id});
-    }
+    print "returning 0\n";
 
     return 0;
 }
@@ -1096,29 +1211,26 @@ sub add_archive_acct {
     #my ($lu, $z2l) = @_;
     my ($lu) = shift;
 
-    my $z2l = get_z2l();
+    my $z2l = get_z2l("archive");
 
-    print "adding archive: ", build_archive_account($lu), 
+    my $archive_account = build_archive_account($lu);
+
+    print "adding archive: ", $archive_account,
         " for ", $lu->get_value("uid"), "\n";
-    $all_users->{(split /\@/, build_archive_account($lu))[0]} = 1;
+    $all_users->{(split /\@/, $archive_account)[0]} = 1;
     my $d3 = new XmlDoc;
     $d3->start('CreateAccountRequest', $MAILNS);
-    $d3->add('name', $MAILNS, undef, build_archive_account($lu));
+    $d3->add('name', $MAILNS, undef, $archive_account);
 
 
     for my $zattr (sort keys %$z2l) {
-
 	my $v;
-# 	if ($zattr =~ /zimbramailhost/i) {
-# 	    $v = $archive_mailhost;
-# 	} elsif ($zattr =~ /zimbracosid/) {
-# 	    $v = $archive_cos_id;
-# 	} else {
-# 	    $v = build_target_z_value($lu, $zattr, $z2l);
-# 	}
-	$v = build_target_z_value($lu, $zattr, $z2l);
 
-	#print "archive provision, $zattr, $v\n";
+	if ($zattr eq "zimbramailhost") {
+	    $v = $archive_mailhost;
+	} else {
+	    $v = build_target_z_value($lu, $zattr, $z2l);
+	}
 
 	$d3->add('a', $MAILNS, {"n" => $zattr}, $v);
     }
