@@ -15,19 +15,6 @@
 #       correct hacks.  Search in script for "hack."
 
 # *****************************
-# exclude calendar-admin from deletes!
-
-##########
-# examples
-# 
-# dev:
-# ldap2zimbra.pl -n -w ldap-pass -m dev.domain.org -p zimbra-pass -z dmail01.domain.org
-# 
-# prod:
-# ldap2zimbra.pl -n -s `cat /usr/local/users_in_zimbra.txt` -w ldap-pass -m domain.org -p zimbra-pass -z mail01.domain.org
-# ldap2zimbra.pl -n -s `cat /usr/local/users_in_zimbra.txt` -w ldap-pass -m domain.org -p zimbra-pass -z mail01.domain.org
-
-
 
 
 ##################################################################
@@ -205,6 +192,9 @@ for my $lusr ($rslt->entries) {
 	next;
     }
 
+    print "working on ", $usr, " ", `date`
+	if (exists $opts->{d});
+
     ### check for a corresponding zimbra account
     my $zu_h = get_z_user($usr);
 
@@ -251,9 +241,8 @@ sub add_user($) {
     my $d = new XmlDoc;
     $d->start('CreateAccountRequest', $MAILNS);
     $d->add('name', $MAILNS, undef, $lu->get_value("uid")."@".$zimbra_domain);
+
     for my $zattr (sort keys %$z2l) {
-	#next if ($zattr =~ /zimbracosid/);
-	
 	my $v = build_target_z_value($lu, $zattr, $z2l);
 	$d->add('a', $MAILNS, {"n" => $zattr}, $v);
     }
@@ -268,7 +257,6 @@ sub add_user($) {
     }
 
     if (!exists $opts->{n}) {
-#	my $r = $SOAP->invoke($url, $d->root(), $context)
 	my $r = check_context_invoke($d, \$context);
 
 	if ($r->name eq "Fault") {
@@ -313,44 +301,56 @@ sub add_user($) {
 # }
 
 
-# get an active acount account from a user account
-sub get_archive_account {
-    my ($zu) = @_;
+{
+    my $archive_cache;
+    
+    # get an active archive account from a user account
+    sub get_archive_account {
+	my ($zu) = @_;
 
-    if (defined $zu &&
- 	exists $zu->{zimbraarchiveaccount}) {
-
-	my $acct_name;
-
-	for $acct_name (@{$zu->{zimbraarchiveaccount}}) {
-	    # check for archive account
-	    my $d2 = new XmlDoc;
-	    $d2->start('GetAccountRequest', $MAILNS); 
-	    $d2->add('account', $MAILNS, { "by" => "name" }, 
-		     #build_archive_account($lu));
-		     $acct_name);
-	    $d2->end();
-	    
-	    my $r2 = check_context_invoke($d2, \$context);
-
-	    if ($r2->name eq "Fault") {
-		my $rsn = get_fault_reason($r2);
-		if ($rsn ne "account.NO_SUCH_ACCOUNT") {
-		    print "problem searching out archive $acct_name\n";
-		    print Dumper($r2);
-		    return;
-		}
-	    }
-
-	    my $mc = $r2->find_child('account');
-
-	    if (defined $mc) {
-		#return ($mc->attrs->{name}, $mc->attrs->{id});
-		return ($mc->attrs->{name});
+	if (defined $zu && exists $zu ->{mail}) {
+	    if (exists $archive_cache->{(@{$zu->{mail}})[0]}) {
+		return $archive_cache->{(@{$zu->{mail}})[0]};
 	    }
 	}
+
+	if (defined $zu &&
+	    exists $zu->{zimbraarchiveaccount}) {
+
+	    my $acct_name;
+
+	    for $acct_name (@{$zu->{zimbraarchiveaccount}}) {
+		# check for archive account
+		my $d2 = new XmlDoc;
+		$d2->start('GetAccountRequest', $MAILNS); 
+		$d2->add('account', $MAILNS, { "by" => "name" }, 
+			 #build_archive_account($lu));
+			 $acct_name);
+		$d2->end();
+		
+		my $r2 = check_context_invoke($d2, \$context);
+
+		if ($r2->name eq "Fault") {
+		    my $rsn = get_fault_reason($r2);
+		    if ($rsn ne "account.NO_SUCH_ACCOUNT") {
+			print "problem searching out archive $acct_name\n";
+			print Dumper($r2);
+			return;
+		    }
+		}
+
+		my $mc = $r2->find_child('account');
+
+		if (defined $mc) {
+		    #return ($mc->attrs->{name}, $mc->attrs->{id});
+		    $archive_cache->{(@{$zu->{mail}})[0]} = 
+			$mc->attrs->{name};
+		    return ($mc->attrs->{name});
+		}
+	    }
+	}
+	return undef;
     }
-    return undef;
 }
 
 
@@ -694,7 +694,6 @@ sub get_z_user($) {
     { $d->add('account', $MAILNS, { "by" => "name" }, $u);} 
     $d->end();
 
-#    my $resp = $SOAP->invoke($url, $d->root(), $context);
     my $r = check_context_invoke($d, \$context);
 
     if ($r->name eq "Fault") {
@@ -946,8 +945,7 @@ sub delete_in_range($$$) {
 	$d->start('SearchDirectoryRequest', $MAILNS);
 	$d->add('query', $MAILNS, undef, $fil);
 	$d->end;
-	
-	#my $r = $SOAP->invoke($url, $d->root(), $context);
+
 	my $r = check_context_invoke($d, \$context);
 # debugging:
 # 	if ($r->name eq "Fault" || !defined $prfx || 
@@ -1026,9 +1024,7 @@ sub parse_and_del($) {
 	}
 
  	if (defined $uid && defined $z_id && 
-	    !exists $all_users->{$uid} && $uid !~ $zimbra_special 
-#	    && $mail !~ /archive$/) {
-	    ) {
+	    !exists $all_users->{$uid} && $uid !~ $zimbra_special) {
 
 	    if (defined $subset_str) { next unless exists ($subset->{$uid}); }
 
@@ -1042,7 +1038,6 @@ sub parse_and_del($) {
  	    $d->end();
 
  	    if (!exists $opts->{n}){
-		#my $r = $SOAP->invoke($url, $d->root(), $context);
 		my $r = check_context_invoke($d, \$context);
 
 		if (exists $opts->{d}) {
@@ -1051,69 +1046,7 @@ sub parse_and_del($) {
 		    print $o."\n";
 		}
 	    }
-
-
-
-# deleting the archive here is misdirected as it doesn't
-# catch orphaned archive accounts..
-
-# 	    # search out the archive account
-# 	    my $d2 = new XmlDoc;
-# 	    $d2->start('SearchDirectoryRequest', $MAILNS);
-# 	    $d2->add('query', $MAILNS, {"types" => "accounts"}, 
-# 		     "mail=${uid}*archive");
-# 	    $d2->end();
-
-# 	    my $r2 = $SOAP->invoke($url, $d2->root(), $context);
-
-# 	    for my $child (@{$r2->children()}) {
-# 		for my $attr (@{$child->children}) {
-# 		    if ((values %{$attr->attrs()})[0] eq "uid") {
-# 			$uid = $attr->content();
-# 		    }
-# 		    if ((values %{$attr->attrs()})[0] eq "mail") {
-# 			$mail = $attr->content();
-# 		    }
-# 		    if ((values %{$attr->attrs()})[0] eq "zimbraId") {
-# 			$z_id = $attr->content();
-# 		    }
-# 		}
-# 		print "\twould delete corresponding archive: $mail..\n";
-# 	    }
-
-	}# elsif ($mail =~ /archive$/) {
-#  	    # extract the uid
-#  	    $mail =~ /^([^\\@]+)\@/;
-#  	    my $archive_uid = $1;
-
-# 	    if (defined $subset_str) {
-# 		next unless exists ($subset->{$archive_uid});
-# 	    }
-
-
-
-# 	    if (!exists $all_users->{$archive_uid} && 
-# 		$archive_uid !~ $zimbra_special) {
-		
-# 		print "deleting archive $mail\n";
-
-# 		my $d = new XmlDoc;
-# 		$d->start('DeleteAccountRequest', $MAILNS);
-# 		$d->add('id', $MAILNS, undef, $z_id);
-# 		$d->end();
-		
-# 		if (!exists $opts->{n}){
-# 		    #my $r = $SOAP->invoke($url, $d->root(), $context);
-# 		    my $r = check_context_invoke($d, \$context);
-		    
-# 		    if (exists $opts->{d}) {
-# 			my $o = $r->to_string("pretty");
-# 			$o =~ s/ns0\://g;
-# 			print $o."\n";
-# 		    }
-# 		}
-# 	    }
-#	}
+	}
     }
 }
     
@@ -1155,56 +1088,6 @@ sub get_zimbra_context {
 }
 
 
-sub archive_acct_exists {
-#    my ($acct_name, $lu, $zu) = shift;
-#    my $acct_name = shift;
-    my @accts = @_;
-
-#     # if an archive account is defined in the user entry use that.
-#     # otherwise use the generated value that was passed in as $acct_name
-#     if (defined $zu &&
-# 	defined     ((@{$zu->{zimbraarchiveaccount}})[0])) {
-# 	$acct_name = (@{$zu->{zimbraarchiveaccount}})[0];
-#     }
-    
-    for my $acct_name (@accts) {
-	# check for and if appropriate create archive account
-	my $d2 = new XmlDoc;
-	$d2->start('GetAccountRequest', $MAILNS); 
-	$d2->add('account', $MAILNS, { "by" => "name" }, 
-		 #build_archive_account($lu));
-		 $acct_name);
-	$d2->end();
-	
-	my $r2 = check_context_invoke($d2, \$context);
-
-	if ($r2->name eq "Fault") {
-	    my $rsn = get_fault_reason($r2);
-	    if ($rsn ne "account.NO_SUCH_ACCOUNT") {
-		print "problem searching out archive $acct_name\n";
-# 	    print "problem searching out archive ", 
-# 	        build_archive_account($lu, $zu),
-# 	        " for ", $lu->get_value("uid")."@".$zimbra_domain, ":\n";
-		print Dumper($r2);
-		return;
-	    }
-	}
-
-	my $mc = $r2->find_child('account');
-
-	if (defined $mc) {
-# 	    print "found archive account: ", $mc->attrs->{name}, "\n"
-# 		if (exists ($opts->{d}));
-
-	    return ($mc->attrs->{name}, $mc->attrs->{id});
-	}
-    }
-
-    print "returning 0\n";
-
-    return 0;
-}
-
 
 
 sub add_archive_acct {
@@ -1245,7 +1128,6 @@ sub add_archive_acct {
     }
 
     if (!exists $opts->{n}) {
-#	my $r = $SOAP->invoke($url, $d->root(), $context)
 	my $r3 = check_context_invoke($d3, \$context);
 
 	if ($r3->name eq "Fault") {
