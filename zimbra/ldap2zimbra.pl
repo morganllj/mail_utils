@@ -33,7 +33,10 @@ my $zimbra_special =
 #    'ser|'.'mlehmann|gab|morgan|cferet|'.  
                # Steve, Matt, Gary, Feret and I
     'calendar-admin|'.        # org calendar admin user
-    'noreply|'.               # noreply: used as from address in broadcast msgs.
+#    'noreply|'.               # noreply: used as from address in broadcast msgs.w
+    'donotreply|'.               # noreply: used as from address in broadcast msgs.w
+
+
     'besadmin|'.
     'hammy|spammy$';          # Spam training users 
 # run case fixing algorithm (fix_case()) on these attrs.
@@ -103,7 +106,6 @@ use Soap;
 $|=1;
 
 sub print_usage();
-#sub get_z2l();
 sub add_user($);
 sub sync_user($$);
 sub get_z_user($);
@@ -114,7 +116,7 @@ sub delete_in_range($$$);
 sub parse_and_del($);
 
 my $opts;
-getopts('hl:D:w:b:em:ndz:s:p:', \%$opts);
+getopts('hl:D:w:b:em:ndz:s:p:a', \%$opts);
 
 $opts->{h}                     && print_usage();
 my $ldap_host = $opts->{l}     || $default_ldap_host;
@@ -125,6 +127,14 @@ my $zimbra_svr = $opts->{z}    || $default_zimbra_svr;
 my $zimbra_domain = $opts->{m} || $default_domain;
 my $zimbra_pass = $opts->{p}   || $default_zimbra_pass;
 my $subset_str = $opts->{s};
+
+my $multi_domain_mode = $opts->{u} || "0";  # the default is to treat
+					    # all users as in the
+					    # default domain --
+					    # basically take the 'uid'
+					    # atribute from ldap and
+					    # concat the default
+					    # domain.
 
 my $archive_domain = $zimbra_domain . ".archive";
 
@@ -145,13 +155,18 @@ my $ACCTNS = "urn:zimbraAdmin";
 my $MAILNS = "urn:zimbraAdmin";
 my $SOAP = $Soap::Soap12;
 
-# has ref to store a list of users added/modified to extra users can
+# hash ref to store a list of users added/modified to extra users can
 # be deleted from zimbra.
 my $all_users;
 my $subset;
+# has ref to store archive accounts that need to be sync'ed.
+my $archive_accts;
 
 print "-n used, no changes will be made.\n"
     if (exists $opts->{n});
+print "-a used, archive accounts will be synced--".
+    "this will almost double run time.\n"
+    if (exists $opts->{a});
 
 if (defined $subset_str) {
     for my $u (split /\s*,\s*/, $subset_str) {$subset->{lc $u} = 0;}
@@ -179,9 +194,31 @@ $rslt->code && die "problem with search $fil: ".$rslt->error;
 # increment through users returned from ldap
 print "\nadd/modify phase..", `date`;
 for my $lusr ($rslt->entries) {
-    my $usr = lc $lusr->get_value("uid");
 
-    if (defined $subset_str) { next unless exists ($subset->{$usr}); }
+    my $usr;
+    if ($multi_domain_mode) {
+	$usr = lc $lusr->get_value("mail");
+    } else {
+	$usr = lc $lusr->get_value("uid") . "@" . $default_domain
+    }
+
+
+    # if $usr is undefined or empty three is likely no mail attribute: 
+    # get the uid attribute and concatenate the default domain
+    if (!defined $usr || $usr =~ /^\s*$/) {
+	# concat the default domain if user doesn't have one--this is
+	# to catch users with out a mail attribute.
+	$usr = $lusr->get_value("uid") . "@" . $zimbra_domain;
+    }
+
+    if (defined $subset_str) {
+
+	my $username = (split /\@/, $usr)[0];
+
+	#next unless exists ($subset->{$usr});
+	next unless (exists ($subset->{$username}) ||
+		     exists ($subset->{$usr}));
+    }
 
     $all_users->{$usr} = 1;
 
@@ -192,10 +229,11 @@ for my $lusr ($rslt->entries) {
 	next;
     }
 
-    print "working on ", $usr, " ", `date`
+    print "\nworking on ", $usr, " ", `date`
 	if (exists $opts->{d});
 
     ### check for a corresponding zimbra account
+    
     my $zu_h = get_z_user($usr);
 
     if (!defined $zu_h) {
@@ -205,6 +243,14 @@ for my $lusr ($rslt->entries) {
     }
 }
 
+
+# print "all users:\n";
+# for my $u (keys %$all_users) {
+#     print "\t$u\n";
+# }
+
+
+# delete accounts that are not in ldap
 if (exists $opts->{e}) {
     print "\ndelete phase, ",`date`;
     delete_not_in_ldap();
@@ -213,13 +259,29 @@ if (exists $opts->{e}) {
 }
 
 
+# sync archive accounts.  We do this last as it roughly doubles the
+# run time of the script and it's not really that critical.
+if (exists $opts->{a}) {
+    print "\nsyncing archives, ", `date`;
+    for my $acct_name (keys %$archive_accts) {
+
+	print "syncing archive $acct_name..\n"
+	    if (exists $opts->{d});
+
+ 	find_and_apply_user_diffs($archive_accts->{$acct_name}, 
+				  get_z_user($acct_name), 1);
+    }
+}
+    
+
+
 ### get a list of zimbra accounts, compare to ldap accounts, delete
-### zimbra accounts no longer in in LDAP.
+### zimbra accounts no longer in LDAP.
 
 $rslt = $ldap->unbind;
 
-print "finished at ", `date`;
-print "\n";
+print "\nfinished at ", `date`;
+
 
 
 
@@ -286,23 +348,10 @@ sub add_user($) {
 
 
 
-# sub build_archive_account {
-#     my ($lu, $zu) = @_;
-
-#     if (defined $zu &&
-#  	exists $zu->{zimbraarchiveaccount}) {
-# 	print "returning archive account: ", 
-# 	    join (',', @{$zu->{zimbraarchiveaccount}}), "\n";
-# # 	return (@{$zu->{zimbraarchiveaccount}})[0];
-#  	return @{$zu->{zimbraarchiveaccount}};
-#     }
-
-#     return $lu->get_value("orgghrsintemplidno")."\@".$archive_domain;
-# }
 
 
 {
-    my $archive_cache;
+    my $archive_cache;  # local to sub get_archive_account()
     
     # get an active archive account from a user account
     sub get_archive_account {
@@ -396,9 +445,10 @@ sub sync_user($$) {
     my ($zu, $lu) = @_;
 
     # sync user
-    find_and_apply_user_diffs($zu, $lu);
+#    find_and_apply_user_diffs($zu, $lu);
+    find_and_apply_user_diffs($lu, $zu);
 
-    # get the archive account. This will return undef if the archive in
+    # get the archive account. Returns undef if the archive in
     # the user account doesn't exist.
     my $archive_acct_name = get_archive_account($zu);    
     
@@ -408,9 +458,25 @@ sub sync_user($$) {
 	    add_archive_acct($lu);
 	}
     } else {
+
+
+# ldap2zimbra just takes too long if we sync the archive accounts too.
+# I'm moving archive account syncing to the end of the script and
+# making it optional so it could be run less often.  Archive account
+# syncing really isn't critical and could be run less often..
+
 	# the archive account does exist, get its id and sync it
-	my $z_id = get_archive_account_id($archive_acct_name);
-	find_and_apply_user_diffs($zu, $lu, $z_id);
+#	my $z_id = get_archive_account_id($archive_acct_name);
+#	find_and_apply_user_diffs($zu, $lu, $z_id);
+
+#	$all_users->{(@{$zu->{uid}})[0]} = 1;
+#	$all_users->{(@{$zu->{mail}})[0]} = 1;
+	$all_users->{$archive_acct_name} = 1;
+
+	# store the archive account name an the ldap user object for
+	# later syncing.
+	$archive_accts->{$archive_acct_name} = $lu
+	    if (exists $opts->{a});
     }
 }
 
@@ -419,27 +485,32 @@ sub sync_user($$) {
 # find_and_apply_user_diffs knows it's been passed an archive
 # account when it gets a zimbra_id as its last argument.
 sub find_and_apply_user_diffs {
-    my ($zu, $lu, $zimbra_id) = @_;
+#    my ($zu, $lu, $zimbra_id) = @_;
+    my ($lu, $zu, $syncing_archive_acct) = @_;
 
     my $z2l;
-    my $syncing_archive_acct = 0;
 
-    if (defined $zimbra_id) {
-	# we're syncing an archive account..
-	$syncing_archive_acct = 1;
-	$zu = get_z_user(get_archive_account($zu));
-	$all_users->{(@{$zu->{uid}})[0]} = 1;
+#    my $syncing_archive_acct = 0;
+    if (defined $syncing_archive_acct && $syncing_archive_acct == 1) {
+
+#    if (defined $zimbra_id) {
+#     if (!defined $zu) {
+	
+# 	# we're syncing an archive account..
+# 	$syncing_archive_acct = 1;
+# 	$zu = get_z_user(get_archive_account($zu));
+# #	$all_users->{(@{$zu->{uid}})[0]} = 1;
 	$z2l = get_z2l("archive");
+
     } else {
 	$z2l = get_z2l();
+	$syncing_archive_acct = 0;
     }
 
-    $zimbra_id = (@{$zu->{zimbraid}})[0];
+    my $zimbra_id = (@{$zu->{zimbraid}})[0];
 
-#    my $z2l = get_z2l();
     my $d = new XmlDoc();
     $d->start('ModifyAccountRequest', $MAILNS);
-#    $d->add('id', $MAILNS, undef, (@{$zu->{zimbraid}})[0]);
     $d->add('id', $MAILNS, undef, $zimbra_id);
 
     my $diff_found=0;
@@ -461,10 +532,10 @@ sub find_and_apply_user_diffs {
 	    $l_val_str = build_target_z_value($lu, $zattr, $z2l);
 	}
 
-	if (!defined($l_val_str)) {
-	    print "$zattr is not defined, can't add user.  Aborting.\n";
-	    return;
-	}
+# 	if (!defined($l_val_str)) {
+# 	    print "$zattr is not defined, can't add user.  Aborting.\n";
+# 	    return;
+# 	}
 
  	if (($zattr =~ /amavisarchivequarantineto/i ||
  	    $zattr =~ /zimbraarchiveaccount/i) && 
@@ -478,10 +549,12 @@ sub find_and_apply_user_diffs {
  	    if (defined $acct) {
  		$l_val_str = $acct;
  	    }
-	} else {
-	    next
-	}
-	
+	}# else {
+#	    next
+#	}
+
+#	print "comparing $l_val_str and $z_val_str\n";
+
 	if ($l_val_str ne $z_val_str) {
 	    if (exists $opts->{d}) {
 		print "different values for $zattr:\n".
@@ -509,7 +582,9 @@ sub find_and_apply_user_diffs {
 
     if ($diff_found) {
 
-	print "\nsyncing ", (@{$zu->{mail}})[0], "\n";
+
+	print "\n" if (!exists $opts->{d});
+	print "syncing ", (@{$zu->{mail}})[0], "\n";
 
 	my $o;
 	print "changes:\n";
@@ -691,7 +766,7 @@ sub get_z_user($) {
     my $ret;
     my $d = new XmlDoc;
     $d->start('GetAccountRequest', $MAILNS); 
-    { $d->add('account', $MAILNS, { "by" => "name" }, $u);} 
+    $d->add('account', $MAILNS, { "by" => "name" }, $u);
     $d->end();
 
     my $r = check_context_invoke($d, \$context);
@@ -713,9 +788,6 @@ sub get_z_user($) {
     for my $child (@{$middle_child->children()}) {
 	# TODO: check for multiple attrs.  The data structure allows
 	#     it but I don't think it will ever happen.
-	#print "content: " . $child->content() . "\n";
-	#print "attrs: ". (values %{$child->attrs()})[0];
-	# print ((values %{$child->attrs()})[0], ": ", $child->content(), "\n");
 	push @{$ret->{lc ((values %{$child->attrs()})[0])}}, $child->content();
      }
 
@@ -1023,10 +1095,17 @@ sub parse_and_del($) {
 	    next;
 	}
 
- 	if (defined $uid && defined $z_id && 
-	    !exists $all_users->{$uid} && $uid !~ $zimbra_special) {
+#  	if (defined $uid && defined $z_id && 
+# 	    !exists $all_users->{$uid} && $uid !~ $zimbra_special) {
+ 	if (defined $mail && defined $z_id && 
+	    !exists $all_users->{$mail} && $uid !~ $zimbra_special) {
 
-	    if (defined $subset_str) { next unless exists ($subset->{$uid}); }
+
+	    if (defined $subset_str) {
+		next unless (exists($subset->{$uid}) || 
+			     exists($subset->{$mail}));
+	    }
+
 
  	    #print "deleting $uid, $z_id..\n";
  	    #print "deleting $mail, $z_id..\n";
@@ -1100,7 +1179,8 @@ sub add_archive_acct {
 
     print "adding archive: ", $archive_account,
         " for ", $lu->get_value("uid"), "\n";
-    $all_users->{(split /\@/, $archive_account)[0]} = 1;
+#    $all_users->{(split /\@/, $archive_account)[0]} = 1;
+    $all_users->{$archive_account} = 1;
     my $d3 = new XmlDoc;
     $d3->start('CreateAccountRequest', $MAILNS);
     $d3->add('name', $MAILNS, undef, $archive_account);
