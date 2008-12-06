@@ -10,9 +10,9 @@
 $host    = "localhost";
 $dir_mgr = "cn=directory\\ manager";
 $pass    = "pass";
-$base    = "dc=domain,dc=org";
+$base    = "dc=morganjones,dc=org";
 
-$new_pass = "paper18";
+$new_pass = "newpass";
 
 $backup_ldif = "add_alt_passwds." . $$ . ".ldif";
 $new_pass_ldif = "add_alt_passwds_newpass.ldif";
