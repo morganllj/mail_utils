@@ -33,8 +33,8 @@ my $zimbra_special =
 #    'ser|'.'mlehmann|gab|morgan|cferet|'.  
                # Steve, Matt, Gary, Feret and I
     'calendar-admin|'.        # org calendar admin user
-#    'noreply|'.               # noreply: used as from address in broadcast msgs.w
-    'donotreply|'.               # noreply: used as from address in broadcast msgs.w
+#    'noreply|'.              # noreply: used as from address in broadcast msgs.
+    'donotreply|'.            # noreply: used as from address in broadcast msgs.
 
 
     'besadmin|'.
@@ -67,11 +67,17 @@ my $default_domain       = "dev.domain.org";
 
 my $archive_mailhost = "dmail02.domain.org";
 
-# TODO: clean up cos handling!
+# TODO: look up cos by name instead of requiring the user enter the cos id.
 # prod:
 #my $archive_cos_id = "249ef618-29d0-465e-86ae-3eb407b65540";
 # dev:
 my $archive_cos_id = "c0806006-9813-4ff2-b0a9-667035376ece";
+
+# Global Calendar settings.  ldap2zimbra can create a calendar share
+# in every user.
+my $cal_owner = "calendar-admin\@dev.domain.org";
+my $cal_name  = "Academic Calendar";
+my $cal_path  = "/" . $cal_name;
 
 
 
@@ -138,13 +144,6 @@ my $multi_domain_mode = $opts->{u} || "0";  # the default is to treat
 
 my $archive_domain = $zimbra_domain . ".archive";
 
-
-
-
-
-
-
-
 my $fil = $default_ldap_filter;
 
 # url for zimbra store.  It can be any of your stores
@@ -154,6 +153,7 @@ my $url = "https://" . $zimbra_svr . ":7071/service/admin/soap/";
 my $ACCTNS = "urn:zimbraAdmin";
 my $MAILNS = "urn:zimbraAdmin";
 my $SOAP = $Soap::Soap12;
+my $sessionId;  # set in get_zimbra_context()
 
 # hash ref to store a list of users added/modified to extra users can
 # be deleted from zimbra.
@@ -203,7 +203,7 @@ for my $lusr ($rslt->entries) {
     }
 
 
-    # if $usr is undefined or empty three is likely no mail attribute: 
+    # if $usr is undefined or empty there is likely no mail attribute: 
     # get the uid attribute and concatenate the default domain
     if (!defined $usr || $usr =~ /^\s*$/) {
 	# concat the default domain if user doesn't have one--this is
@@ -243,13 +243,6 @@ for my $lusr ($rslt->entries) {
     }
 }
 
-
-# print "all users:\n";
-# for my $u (keys %$all_users) {
-#     print "\t$u\n";
-# }
-
-
 # delete accounts that are not in ldap
 if (exists $opts->{e}) {
     print "\ndelete phase, ",`date`;
@@ -260,19 +253,20 @@ if (exists $opts->{e}) {
 
 
 # sync archive accounts.  We do this last as it roughly doubles the
-# run time of the script and it's not really that critical.
+# run time of the script and it's not critical.
 if (exists $opts->{a}) {
     print "\nsyncing archives, ", `date`;
     for my $acct_name (keys %$archive_accts) {
 
-	print "syncing archive $acct_name..\n"
+	print "\nsyncing archive $acct_name..\n"
 	    if (exists $opts->{d});
 
  	find_and_apply_user_diffs($archive_accts->{$acct_name}, 
 				  get_z_user($acct_name), 1);
     }
+} else {
+    print "\nnot syncing archives (enable with -a)\n";
 }
-    
 
 
 ### get a list of zimbra accounts, compare to ldap accounts, delete
@@ -326,12 +320,26 @@ sub add_user($) {
 	    print Dumper $r;
 	}
 
+	my $mail;
+	for my $c (@{$r->children()}) {
+	    for my $attr (@{$c->children()}) {
+		if ((values %{$attr->attrs()})[0] eq "mail") {
+		    $mail = $attr->content();
+		}
+	    }
+	}
+#	print "mail: $mail\n";
+
 	if (exists $opts->{d} && !exists $opts->{n}) {
 	    $o = $r->to_string("pretty");
 	    $o =~ s/ns0\://g;
 	    print $o."\n";
 	}
+
+	add_global_calendar($mail);
     }
+
+
 
     # The user is newly created so does not have a legacy archive account..
     # get the archive name
@@ -403,6 +411,62 @@ sub add_user($) {
 }
 
 
+sub add_global_calendar($) {
+    my $mail = shift;
+
+    # delegate auth to the user
+    my $d = new XmlDoc;
+    $d->start('DelegateAuthRequest', $MAILNS);
+    $d->add('account', $MAILNS, { by => "name" }, 
+	    $mail);
+    $d->end();
+
+    #my $r = $SOAP->invoke($url, $d->root(), $context);
+    my $r = check_context_invoke($d, \$context);
+
+    if ($r->name eq "Fault") {
+	#my $rsn = get_fault_reason($r2);
+	print "fault while delegating auth to $mail:\n";
+	print Dumper($r);
+	print "calendar $cal_name will not be added.\n";
+	return;
+    }
+
+
+    my $new_auth_token = $r->find_child('authToken')->content;
+
+    # assumes get_zimbra_context has been called to populate
+    # $sessionId already.  I think that is a safe assumption
+    my $new_context = $SOAP->zimbraContext($new_auth_token, $sessionId);
+
+    # create an xmlDoc
+    my $d2 = new XmlDoc;
+    # type of request (GetAccountRequest, CreateAccountRequest)
+    $d2->start('CreateMountpointRequest', "urn:zimbraMail");
+    $d2->add('link', "urn:zimbraMail", 
+	    {"owner" => $cal_owner,
+	     "l" => "1",
+	     "path" => $cal_path,
+	     "name" => $cal_name});
+    $d2->end();
+
+    if (!exists $opts->{n}) {
+	my $r2 = check_context_invoke($d2, \$new_context);
+
+	if ($r2->name eq "Fault") {
+	    my $rsn = get_fault_reason($r2);
+	    
+	    unless ($rsn eq "mail.ALREADY_EXISTS") {
+		print "\nFault during calendar create mount:\n";
+		print Dumper ($r2);
+	    }
+	} else {
+	    print "added calendar $cal_name to $mail\n";
+	}
+    }
+}
+
+
 # build a new archive account from $lu
 sub build_archive_account($) {
     my $lu = shift;
@@ -410,6 +474,8 @@ sub build_archive_account($) {
     return $lu->get_value("orgghrsintemplidno")."\@".$archive_domain;
 }
 
+
+######
 sub get_archive_account_id($) {
     my $a = shift;
 
@@ -440,12 +506,12 @@ sub get_archive_account_id($) {
     return undef;
 }
 
+
+
 ######
 sub sync_user($$) {
     my ($zu, $lu) = @_;
 
-    # sync user
-#    find_and_apply_user_diffs($zu, $lu);
     find_and_apply_user_diffs($lu, $zu);
 
     # get the archive account. Returns undef if the archive in
@@ -458,50 +524,29 @@ sub sync_user($$) {
 	    add_archive_acct($lu);
 	}
     } else {
-
-
-# ldap2zimbra just takes too long if we sync the archive accounts too.
-# I'm moving archive account syncing to the end of the script and
-# making it optional so it could be run less often.  Archive account
-# syncing really isn't critical and could be run less often..
-
-	# the archive account does exist, get its id and sync it
-#	my $z_id = get_archive_account_id($archive_acct_name);
-#	find_and_apply_user_diffs($zu, $lu, $z_id);
-
-#	$all_users->{(@{$zu->{uid}})[0]} = 1;
-#	$all_users->{(@{$zu->{mail}})[0]} = 1;
 	$all_users->{$archive_acct_name} = 1;
 
-	# store the archive account name an the ldap user object for
+	# store the archive account name and the ldap user object for
 	# later syncing.
 	$archive_accts->{$archive_acct_name} = $lu
 	    if (exists $opts->{a});
     }
+
+    add_global_calendar((@{$zu->{mail}})[0]);
 }
 
 
 
+######
 # find_and_apply_user_diffs knows it's been passed an archive
 # account when it gets a zimbra_id as its last argument.
 sub find_and_apply_user_diffs {
-#    my ($zu, $lu, $zimbra_id) = @_;
     my ($lu, $zu, $syncing_archive_acct) = @_;
 
     my $z2l;
 
-#    my $syncing_archive_acct = 0;
     if (defined $syncing_archive_acct && $syncing_archive_acct == 1) {
-
-#    if (defined $zimbra_id) {
-#     if (!defined $zu) {
-	
-# 	# we're syncing an archive account..
-# 	$syncing_archive_acct = 1;
-# 	$zu = get_z_user(get_archive_account($zu));
-# #	$all_users->{(@{$zu->{uid}})[0]} = 1;
 	$z2l = get_z2l("archive");
-
     } else {
 	$z2l = get_z2l();
 	$syncing_archive_acct = 0;
@@ -549,17 +594,21 @@ sub find_and_apply_user_diffs {
  	    if (defined $acct) {
  		$l_val_str = $acct;
  	    }
-	}# else {
-#	    next
-#	}
-
-#	print "comparing $l_val_str and $z_val_str\n";
+	}
 
 	if ($l_val_str ne $z_val_str) {
+	    
+	    if ($diff_found == 0) {
+		print "\n" if (!exists $opts->{d});
+		print "syncing ", (@{$zu->{mail}})[0], "\n";
+	    }
+	    
 	    if (exists $opts->{d}) {
 		print "different values for $zattr:\n".
 		    "\tldap:   $l_val_str\n".
 		    "\tzimbra: $z_val_str\n";
+	    } else {
+		print "was: $zattr: $z_val_str\n";
 	    }
 	    
 	    # zimbraMailHost 
@@ -582,12 +631,10 @@ sub find_and_apply_user_diffs {
 
     if ($diff_found) {
 
-
-	print "\n" if (!exists $opts->{d});
-	print "syncing ", (@{$zu->{mail}})[0], "\n";
+# 	print "\n" if (!exists $opts->{d});
+# 	print "syncing ", (@{$zu->{mail}})[0], "\n";
 
 	my $o;
-	print "changes:\n";
 	$o = $d->to_string("pretty");
 	$o =~ s/ns0\://g;
 	print $o;
@@ -667,7 +714,7 @@ sub get_z2l($) {
 # #       "zimbramailcanonicaladdress" => ["placeholder.."]  # fix this too. 
 # 	"zimbraarchiveaccount" =>      ["placeholder.."], # and this
 # 	"amavisarchivequarantineto" => ["placeholder.."],  # this too.
-# 	"zimbracosid"               => ["palceholder.."]
+# 	"zimbracosid"               => ["placeholder.."]
 #     };
 
     
@@ -677,12 +724,12 @@ sub get_z2l($) {
     if (defined $type && $type eq "archive") {
 	# TODO: build_target_z_value can't handle literals..
 	$z2l = {
-	    "displayname" =>           ["givenname", "sn"],
+#	    "displayname" =>           ["givenname", "sn"],
 	    #		    "(", "orgoccupationalgroup", ")"],
 	    "zimbramailhost" =>        ["placeholder.."],
 	    #       "zimbramailcanonicaladdress" => ["placeholder.."]
-	    "zimbraarchiveaccount" =>      ["placeholder.."],
-	    "amavisarchivequarantineto" => ["placeholder.."],
+#	    "zimbraarchiveaccount" =>      ["placeholder.."],
+#	    "amavisarchivequarantineto" => ["placeholder.."],
 	    "zimbracosid"               => ["placeholder.."]
 	};
     } elsif (defined $type) {
@@ -700,7 +747,7 @@ sub get_z2l($) {
 	    #       "zimbramailcanonicaladdress" => ["placeholder.."]
 	    "zimbraarchiveaccount" =>      ["placeholder.."],
 	    "amavisarchivequarantineto" => ["placeholder.."],
-#	    "zimbracosid"               => ["palceholder.."]
+#	    "zimbracosid"               => ["placeholder.."]
 	};
     }
 
@@ -713,6 +760,7 @@ sub get_z2l($) {
 }
     
 
+######
 sub build_zmailhost($) {
     my $org_id = shift;
 
@@ -804,7 +852,7 @@ sub fix_case($) {
 
     # upcase the first character after each
     my $uc_after_exp = '\s\-\/\.&\'\(\)'; # exactly as you want it in [] 
-                                      #   (char class) in regex
+                                          #   (char class) in regex
     # upcase these when they're standing alone
     my @uc_clusters = qw/hs hr ms es avts pd/;
 
@@ -950,10 +998,7 @@ sub delete_not_in_ldap() {
 	    return;
 	}
 
-	#print "returned ", $r->num_children, " children\n";
-
 	parse_and_del($r);
-
     }
 }
 
@@ -1077,20 +1122,20 @@ sub parse_and_del($) {
 	my ($uid, $mail, $z_id);
 
 	for my $attr (@{$child->children}) {
-  	    if ((values %{$attr->attrs()})[0] eq "uid") {
-  		$uid = $attr->content();
- 	    }
-	    if ((values %{$attr->attrs()})[0] eq "mail") {
-  		$mail = $attr->content();
- 	    }
-  	    if ((values %{$attr->attrs()})[0] eq "zimbraId") {
-  		$z_id = $attr->content();
-  	    }
+
+	    $uid = $attr->content()
+		if ((values %{$attr->attrs()})[0] eq "uid");
+
+	    $mail = $attr->content()
+		if ((values %{$attr->attrs()})[0] eq "mail");
+
+	    $z_id = $attr->content()
+		if ((values %{$attr->attrs()})[0] eq "zimbraId");
  	}
 
 	# skip special users
 	if ($uid =~ /$zimbra_special/) {
-	    print "skipping special user $uid\n"
+	    print "\tskipping special user $uid\n"
 		if (exists $opts->{d});
 	    next;
 	}
@@ -1106,9 +1151,6 @@ sub parse_and_del($) {
 			     exists($subset->{$mail}));
 	    }
 
-
- 	    #print "deleting $uid, $z_id..\n";
- 	    #print "deleting $mail, $z_id..\n";
 	    print "deleting $mail..\n";
 
  	    my $d = new XmlDoc;
@@ -1134,7 +1176,6 @@ sub get_fault_reason {
     my $r = shift;
 
     # get the reason for the fault
-    #my $rsn;
     for my $v (@{$r->children()}) {
         if ($v->name eq "Detail") {
 	    for my $v2 (@{@{$v->children()}[0]->children()}) {
@@ -1160,8 +1201,10 @@ sub get_zimbra_context {
 
     # get back an authResponse, authToken, sessionId & context.
     my $authResponse = $SOAP->invoke($url, $d->root());
+
     my $authToken = $authResponse->find_child('authToken')->content;
-    my $sessionId = $authResponse->find_child('sessionId')->content;
+    # this needs to global to allow delegated auth to work..
+    $sessionId = $authResponse->find_child('sessionId')->content;
 
     return $SOAP->zimbraContext($authToken, $sessionId);
 }
