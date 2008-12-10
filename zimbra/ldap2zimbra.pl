@@ -75,7 +75,7 @@ my $archive_cos_id = "c0806006-9813-4ff2-b0a9-667035376ece";
 
 # Global Calendar settings.  ldap2zimbra can create a calendar share
 # in every user.
-my $cal_owner = "calendar-admin\@dev.domain.org";
+my $cal_owner = "calendar-admin\@" . $default_domain;
 my $cal_name  = "Academic Calendar";
 my $cal_path  = "/" . $cal_name;
 
@@ -258,7 +258,7 @@ if (exists $opts->{a}) {
     print "\nsyncing archives, ", `date`;
     for my $acct_name (keys %$archive_accts) {
 
-	print "\nsyncing archive $acct_name..\n"
+	print "\nworking on archive $acct_name ", " ", `date`
 	    if (exists $opts->{d});
 
  	find_and_apply_user_diffs($archive_accts->{$acct_name}, 
@@ -300,6 +300,12 @@ sub add_user($) {
 
     for my $zattr (sort keys %$z2l) {
 	my $v = build_target_z_value($lu, $zattr, $z2l);
+
+	if (!defined($v)) {
+	    print "unable to build value for $zattr, skipping..\n";
+	    next;
+	}
+
 	$d->add('a', $MAILNS, {"n" => $zattr}, $v);
     }
     $d->end();
@@ -318,6 +324,7 @@ sub add_user($) {
 	if ($r->name eq "Fault") {
 	    print "problem adding user:\n";
 	    print Dumper $r;
+	    return;
 	}
 
 	my $mail;
@@ -328,8 +335,6 @@ sub add_user($) {
 		}
 	    }
 	}
-#	print "mail: $mail\n";
-
 	if (exists $opts->{d} && !exists $opts->{n}) {
 	    $o = $r->to_string("pretty");
 	    $o =~ s/ns0\://g;
@@ -411,59 +416,81 @@ sub add_user($) {
 }
 
 
-sub add_global_calendar($) {
-    my $mail = shift;
+{ my $no_such_folder_notified = 0;  # remember if we've notified about
+				    # a mail.NO_SUCH_FOLDER error so
+				    # we don't notify over and over.
+  sub add_global_calendar($) {
+      my $mail = shift;
 
-    # delegate auth to the user
-    my $d = new XmlDoc;
-    $d->start('DelegateAuthRequest', $MAILNS);
-    $d->add('account', $MAILNS, { by => "name" }, 
-	    $mail);
-    $d->end();
+      # delegate auth to the user
+      my $d = new XmlDoc;
+      $d->start('DelegateAuthRequest', $MAILNS);
+      $d->add('account', $MAILNS, { by => "name" }, 
+	      $mail);
+      $d->end();
 
-    #my $r = $SOAP->invoke($url, $d->root(), $context);
-    my $r = check_context_invoke($d, \$context);
+      #my $r = $SOAP->invoke($url, $d->root(), $context);
+      my $r = check_context_invoke($d, \$context);
 
-    if ($r->name eq "Fault") {
-	#my $rsn = get_fault_reason($r2);
-	print "fault while delegating auth to $mail:\n";
-	print Dumper($r);
-	print "calendar $cal_name will not be added.\n";
-	return;
-    }
+      if ($r->name eq "Fault") {
+	  #my $rsn = get_fault_reason($r2);
+	  print "fault while delegating auth to $mail:\n";
+	  print Dumper($r);
+	  print "calendar $cal_name will not be added.\n";
+	  return;
+      }
 
 
-    my $new_auth_token = $r->find_child('authToken')->content;
+      my $new_auth_token = $r->find_child('authToken')->content;
 
-    # assumes get_zimbra_context has been called to populate
-    # $sessionId already.  I think that is a safe assumption
-    my $new_context = $SOAP->zimbraContext($new_auth_token, $sessionId);
+      # assumes get_zimbra_context has been called to populate
+      # $sessionId already.  I think that is a safe assumption
+      my $new_context = $SOAP->zimbraContext($new_auth_token, $sessionId);
 
-    # create an xmlDoc
-    my $d2 = new XmlDoc;
-    # type of request (GetAccountRequest, CreateAccountRequest)
-    $d2->start('CreateMountpointRequest', "urn:zimbraMail");
-    $d2->add('link', "urn:zimbraMail", 
-	    {"owner" => $cal_owner,
-	     "l" => "1",
-	     "path" => $cal_path,
-	     "name" => $cal_name});
-    $d2->end();
+      # create an xmlDoc
+      my $d2 = new XmlDoc;
+      # type of request (GetAccountRequest, CreateAccountRequest)
+      $d2->start('CreateMountpointRequest', "urn:zimbraMail");
+      $d2->add('link', "urn:zimbraMail", 
+	       {"owner" => $cal_owner,
+		"l" => "1",
+		"path" => $cal_path,
+		"name" => $cal_name});
+      $d2->end();
 
-    if (!exists $opts->{n}) {
-	my $r2 = check_context_invoke($d2, \$new_context);
+      if (!exists $opts->{n}) {
+	  my $r2 = check_context_invoke($d2, \$new_context);
 
-	if ($r2->name eq "Fault") {
-	    my $rsn = get_fault_reason($r2);
-	    
-	    unless ($rsn eq "mail.ALREADY_EXISTS") {
-		print "\nFault during calendar create mount:\n";
-		print Dumper ($r2);
-	    }
-	} else {
-	    print "added calendar $cal_name to $mail\n";
-	}
-    }
+	  if ($r2->name eq "Fault") {
+	      my $rsn = get_fault_reason($r2);
+	      
+	      if ($rsn eq "mail.ALREADY_EXISTS") {
+		  # do nothing
+	      } elsif ($rsn eq "mail.NO_SUCH_FOLDER") { 
+		  unless ($no_such_folder_notified) {
+		      print "\n*** ERROR: There is no calendar named ".
+                          "$cal_name under".
+                     
+			  "\n*** user $cal_owner.  No calendar will be ".
+                          "shared.".
+
+                          "\n*** This error will re-occur for every ".
+                          "user but".
+
+                          "\n*** this is the only notification you ".
+                          "will receive.\n";
+
+		      $no_such_folder_notified = 1;
+		  }
+	      } else {
+		  print "\nFault during calendar create mount:\n";
+		  print Dumper ($r2);
+	      }
+	  } else {
+	      print "added calendar $cal_name to $mail\n";
+	  }
+      }
+  }
 }
 
 
@@ -575,6 +602,11 @@ sub find_and_apply_user_diffs {
 	} else {
 	    # build the values from ldap using zimbra capitalization
 	    $l_val_str = build_target_z_value($lu, $zattr, $z2l);
+
+	    if (!defined($l_val_str)) {
+		print "unable to build value for $zattr, skipping..\n";
+		next;
+	    }
 	}
 
 # 	if (!defined($l_val_str)) {
@@ -786,8 +818,7 @@ sub build_zmailhost($) {
 	    return "mail05.domain.org";
 	} else {
 	    print "WARNING! SDP id /$org_id/ did not resolve to a valid ".
-		"zimbraMailHost.\n  This shouldn't be possible.. ".
-		"returning undef.";
+		"zimbraMailHost.\n  This shouldn't be possible.. ";
 	    return undef;
 	}
     } elsif ($zimbra_domain eq "dev.domain.org") {
@@ -1238,6 +1269,11 @@ sub add_archive_acct {
 	    $v = build_target_z_value($lu, $zattr, $z2l);
 	}
 
+	if (!defined($v)) {
+	    print "unable to build value for $zattr, skipping..\n";
+	    next;
+	}
+	
 	$d3->add('a', $MAILNS, {"n" => $zattr}, $v);
     }
     $d3->end();
