@@ -23,6 +23,7 @@
 # The Zimbra SOAP libraries.  Download and uncompress the Zimbra
 # source code to get them.
 use lib "/usr/local/zcs-5.0.2_GA_1975-src/ZimbraServer/src/perl/soap";
+use POSIX ":sys_wait_h";
 # these accounts will never be added, removed or modified
 #   It's a perl regex
 my $zimbra_special = 
@@ -51,6 +52,8 @@ my @z2l_literals = qw/( )/;
 # searching for users to delete:
 # 5 == aaaaa*
 my $max_recurse = 5;
+
+my $parallelism = 4;  # number of processes to run simultaneously.
 
 
 
@@ -84,17 +87,18 @@ my $cal_path  = "/" . $cal_name;
 
 
 # default ldap settings, can be overridden on the command line
+# my $default_ldap_host    = "ldap0.domain.org";
 my $default_ldap_host    = "ldap0.domain.org";
 my $default_ldap_base    = "dc=domain,dc=org";
 my $default_ldap_bind_dn = "cn=Directory Manager";
-my $default_ldap_pass    = "pass";
+my $default_ldap_pass    = "UoTM3rd";
 # good for testing/debugging:
-# my $default_ldap_filter = 
-#    "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
+#my $default_ldap_filter = 
+#   "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
 # my $default_ldap_filter = "(orghomeorgcd=9500)";
 #
 # production:
- my $default_ldap_filter = "(objectclass=orgZimbraPerson)";
+my $default_ldap_filter = "(objectclass=orgZimbraPerson)";
 
 #### End Site-specific settings
 #############################################################
@@ -187,60 +191,113 @@ $rslt->code && die "unable to bind as $binddn: $rslt->error";
 my $context = get_zimbra_context();
 
 # search users out of ldap
+# here:
 print "getting user list from ldap: $fil\n";
 $rslt = $ldap->search(base => "$ldap_base", filter => $fil);
 $rslt->code && die "problem with search $fil: ".$rslt->error;
 
 # increment through users returned from ldap
 print "\nadd/modify phase..", `date`;
+
+
+my $pids;  # keep track of PIDs as child processes run
+
 for my $lusr ($rslt->entries) {
+# for (my $i; $i<20000; $i++) {
 
-    my $usr;
-    if ($multi_domain_mode) {
-	$usr = lc $lusr->get_value("mail");
-    } else {
-	$usr = lc $lusr->get_value("uid") . "@" . $default_domain
-    }
+     my $usr;
+     if ($multi_domain_mode) {
+ 	$usr = lc $lusr->get_value("mail");
+     } else {
+ 	$usr = lc $lusr->get_value("uid") . "@" . $default_domain
+     }
 
 
-    # if $usr is undefined or empty there is likely no mail attribute: 
-    # get the uid attribute and concatenate the default domain
-    if (!defined $usr || $usr =~ /^\s*$/) {
-	# concat the default domain if user doesn't have one--this is
-	# to catch users with out a mail attribute.
-	$usr = $lusr->get_value("uid") . "@" . $zimbra_domain;
-    }
+     # if $usr is undefined or empty there is likely no mail attribute: 
+     # get the uid attribute and concatenate the default domain
+     if (!defined $usr || $usr =~ /^\s*$/) {
+ 	# concat the default domain if user doesn't have one--this is
+ 	# to catch users with out a mail attribute.
+ 	$usr = $lusr->get_value("uid") . "@" . $zimbra_domain;
+     }
 
-    if (defined $subset_str) {
+     if (defined $subset_str) {
 
-	my $username = (split /\@/, $usr)[0];
+ 	my $username = (split /\@/, $usr)[0];
 
-	#next unless exists ($subset->{$usr});
-	next unless (exists ($subset->{$username}) ||
-		     exists ($subset->{$usr}));
-    }
+ 	#next unless exists ($subset->{$usr});
+ 	next unless (exists ($subset->{$username}) ||
+ 		     exists ($subset->{$usr}));
+     }
 
-    $all_users->{$usr} = 1;
+     $all_users->{$usr} = 1;
 
-    # skip special users
-    if ($usr =~ /$zimbra_special/) {
-	print "skipping special user $usr\n"
-	    if (exists $opts->{d});
-	next;
-    }
-
-    print "\nworking on ", $usr, " ", `date`
-	if (exists $opts->{d});
-
-    ### check for a corresponding zimbra account
+     # skip special users
+     if ($usr =~ /$zimbra_special/) {
+ 	print "skipping special user $usr\n"
+ 	    if (exists $opts->{d});
+ 	next;
+     }
     
-    my $zu_h = get_z_user($usr);
+    
+    my $proc_running = 0;  # flag to indicate a process has been started.
 
-    if (!defined $zu_h) {
- 	add_user($lusr);
-    } else {
- 	sync_user($zu_h, $lusr)
-    }
+    do {
+	my $pidcount = keys %$pids;
+
+	print "pidcount: $pidcount, parallelism: $parallelism\n"
+	    if (exists $opts->{d});
+	if ($pidcount < $parallelism) {
+	    print "\nworking on ", $usr, " ($pidcount) ", `date`
+		if (exists $opts->{d});
+	    my $pid = fork();
+	    
+	    if (defined($pid) && $pid == 0) {
+ 		### check for a corresponding zimbra account
+   		my $zu_h = get_z_user($usr);
+
+   		if (!defined $zu_h) {
+   		    add_user($lusr);
+   		} else {
+   		    sync_user($zu_h, $lusr)
+   		}
+		$ldap->unbind();
+		print "finished $usr $$ ", `date`;
+		exit 0;
+	    } elsif (defined($pid) && $pid > 0) {
+		$pids->{$pid} = 1;
+		$proc_running++;
+	    } else {
+		# TODO: count number of failures and fail after a count.
+		print "problem forking!? Sleeping and retrying..\n";
+		sleep 1;
+		next;
+	    }
+
+	} else {
+	    my $proc_reclaimed = 0;
+	    for my $p (keys %$pids) {
+		my $ret = waitpid(-1, WNOHANG);
+
+		if ($ret<0 || $ret>0) {
+		    print "process $ret finished..\n"
+			if (exists $opts->{d});
+		    delete $pids->{$ret};
+		    $proc_reclaimed = 1;
+		} 
+	    }
+
+	    # only sleep if one or more process didn't finish..  this
+	    #   allows us to spin off a new process if one's available
+	    #   but keeps us from busy waiting if all the processes
+	    #   are busy.
+	    unless ($proc_reclaimed) {
+		print "sleeping: no processes reclaimed...\n"
+		    if (exists $opts->{d});
+		sleep 1;
+	    }
+	}
+    } until ($proc_running);
 }
 
 # delete accounts that are not in ldap
