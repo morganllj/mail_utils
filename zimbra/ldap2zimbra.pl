@@ -124,6 +124,7 @@ sub build_target_z_value($$$);
 sub delete_not_in_ldap();
 sub delete_in_range($$$);
 sub parse_and_del($);
+sub renew_context();
 
 my $opts;
 getopts('hl:D:w:b:em:ndz:s:p:a', \%$opts);
@@ -199,8 +200,11 @@ $rslt->code && die "problem with search $fil: ".$rslt->error;
 # increment through users returned from ldap
 print "\nadd/modify phase..", `date`;
 
-
 my $pids;  # keep track of PIDs as child processes run
+$SIG{HUP} = \&renew_context; # handler to cause context to be reloaded.
+my $parent_pid; # used by check_context_invoke in the children: it
+		# needs to know the proc to kill to tell the parent to
+		# reload a stale $context
 
 for my $lusr ($rslt->entries) {
 # for (my $i; $i<20000; $i++) {
@@ -250,19 +254,21 @@ for my $lusr ($rslt->entries) {
 	if ($pidcount < $parallelism) {
 	    print "\nworking on ", $usr, " ($pidcount) ", `date`
 		if (exists $opts->{d});
+
+	    $parent_pid = $$;
+
 	    my $pid = fork();
 	    
 	    if (defined($pid) && $pid == 0) {
  		### check for a corresponding zimbra account
    		my $zu_h = get_z_user($usr);
-
    		if (!defined $zu_h) {
    		    add_user($lusr);
    		} else {
    		    sync_user($zu_h, $lusr)
    		}
+
 		$ldap->unbind();
-		print "finished $usr $$ ", `date`;
 		exit 0;
 	    } elsif (defined($pid) && $pid > 0) {
 		$pids->{$pid} = 1;
@@ -1100,6 +1106,10 @@ sub check_context_invoke {
 
     my $r = $SOAP->invoke($url, $d->root(), $$context_ref);
 
+
+
+
+
     if ($r->name eq "Fault") {
 	my $rsn = get_fault_reason($r);
 	if (defined $rsn && $rsn =~ /AUTH_EXPIRED/) {
@@ -1108,6 +1118,11 @@ sub check_context_invoke {
 	    print "\tre-authenticating..\n";
 	    $$context_ref = get_zimbra_context();
 	    $r = $SOAP->invoke($url, $d->root(), $$context_ref);
+
+	    print "killing $parent_pid to cause global ".
+		"\$context to be reloaded..\n"
+		if (exists $opts->{d});
+	    kill('HUP', $parent_pid);
 	    if ($r->name eq "Fault") {
 		$rsn = get_fault_reason($r);
 		if (defined $rsn && $rsn =~ /AUTH_EXPIRED/) {
@@ -1124,6 +1139,17 @@ sub check_context_invoke {
 	}
     }
     return $r;
+}
+
+
+
+######
+# renew global $context--usually in response to a signal from a child
+sub renew_context () {
+    print "renewing global context in response to signal in proc $$"
+	if (exists($opts->{d}));
+
+    $context = get_zimbra_context();
 }
 
 
