@@ -36,8 +36,7 @@ my $zimbra_special =
     'calendar-admin|'.        # org calendar admin user
 #    'noreply|'.              # noreply: used as from address in broadcast msgs.
     'donotreply|'.            # noreply: used as from address in broadcast msgs.
-
-
+    'smmsp|orgadminuser|'.
     'besadmin|'.
     'hammy|spammy$';          # Spam training users 
 # run case fixing algorithm (fix_case()) on these attrs.
@@ -53,10 +52,11 @@ my @z2l_literals = qw/( )/;
 # 5 == aaaaa*
 my $max_recurse = 5;
 
+# I've only tested parallelism <= 4.  I have seen this script crash a
+# system due to multiprocessing overhead of probably perl fork().  I
+# would suggest you test larger numbers for $parallelism on a
+# development system..
 my $parallelism = 4;  # number of processes to run simultaneously.
-
-
-
 
 # hostname for zimbra store.  It can be any of your stores.
 # it can be overridden on the command line.
@@ -91,9 +91,9 @@ my $cal_path  = "/" . $cal_name;
 my $default_ldap_host    = "ldap0.domain.org";
 my $default_ldap_base    = "dc=domain,dc=org";
 my $default_ldap_bind_dn = "cn=Directory Manager";
-my $default_ldap_pass    = "UoTM3rd";
+my $default_ldap_pass    = "pass";
 # good for testing/debugging:
-#my $default_ldap_filter = 
+# my $default_ldap_filter = 
 #   "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
 # my $default_ldap_filter = "(orghomeorgcd=9500)";
 #
@@ -207,15 +207,12 @@ my $parent_pid; # used by check_context_invoke in the children: it
 		# reload a stale $context
 
 for my $lusr ($rslt->entries) {
-# for (my $i; $i<20000; $i++) {
-
      my $usr;
      if ($multi_domain_mode) {
  	$usr = lc $lusr->get_value("mail");
      } else {
  	$usr = lc $lusr->get_value("uid") . "@" . $default_domain
      }
-
 
      # if $usr is undefined or empty there is likely no mail attribute: 
      # get the uid attribute and concatenate the default domain
@@ -226,7 +223,6 @@ for my $lusr ($rslt->entries) {
      }
 
      if (defined $subset_str) {
-
  	my $username = (split /\@/, $usr)[0];
 
  	#next unless exists ($subset->{$usr});
@@ -335,9 +331,9 @@ if (exists $opts->{a}) {
 ### get a list of zimbra accounts, compare to ldap accounts, delete
 ### zimbra accounts no longer in LDAP.
 
-$rslt = $ldap->unbind;
 
 print "\nfinished at ", `date`;
+$rslt = $ldap->unbind;
 
 
 
@@ -562,6 +558,15 @@ sub build_archive_account($) {
     my $lu = shift;
 
     return $lu->get_value("orgghrsintemplidno")."\@".$archive_domain;
+}
+
+
+#####
+# takes an argument because all subs called out of get_z2l have to.
+# It ignores the argument.
+sub get_archive_cos_id($) {
+
+    return $archive_cos_id;
 }
 
 
@@ -796,36 +801,17 @@ sub get_z2l($) {
     #
     # You can use literals (like '(' or ')') but you need to identify
     # them in @z2l_literals at the top of the script.
+    #
+    # If the attribute requires processing specify a subroutine on the
+    # rhs and built_target_zimbra_value will run that sub instead of
+    # mapping to ldap attributes.
 
-#     return {
-# 	"cn" =>                    ["cn"],
-# 	"zimbrapreffromdisplay" => ["givenname", "sn"],
-#         "givenname" =>             ["givenname"],
-# 	"sn" =>                    ["sn"],
-# 	"displayname" =>           ["givenname", "sn"],
-# 		#		    "(", "orgoccupationalgroup", ")"],
-# 	"zimbramailhost" =>        ["placeholder.."], # fix this, also hacked in
-# 	                                              # build_target_z_value()
-# #       "zimbramailcanonicaladdress" => ["placeholder.."]  # fix this too. 
-# 	"zimbraarchiveaccount" =>      ["placeholder.."], # and this
-# 	"amavisarchivequarantineto" => ["placeholder.."],  # this too.
-# 	"zimbracosid"               => ["placeholder.."]
-#     };
-
-    
-    # anything marked "placeholder" should get special handing in
-    # build_target_z_value()
     my $z2l;
     if (defined $type && $type eq "archive") {
 	# TODO: build_target_z_value can't handle literals..
 	$z2l = {
-#	    "displayname" =>           ["givenname", "sn"],
-	    #		    "(", "orgoccupationalgroup", ")"],
-	    "zimbramailhost" =>        ["placeholder.."],
-	    #       "zimbramailcanonicaladdress" => ["placeholder.."]
-#	    "zimbraarchiveaccount" =>      ["placeholder.."],
-#	    "amavisarchivequarantineto" => ["placeholder.."],
-	    "zimbracosid"               => ["placeholder.."]
+	    "zimbramailhost" => \&get_z_archive_mailhost,
+	    "zimbracosid"    => \&get_archive_cos_id,
 	};
     } elsif (defined $type) {
 	die "unknown type $type received in get_z2l.. ";
@@ -836,13 +822,13 @@ sub get_z2l($) {
 	    "givenname" =>             ["givenname"],
 	    "sn" =>                    ["sn"],
 	    "displayname" =>           ["givenname", "sn"],
-	    #		    "(", "orgoccupationalgroup", ")"],
-	    "zimbramailhost" =>        ["placeholder.."],
-	    # build_target_z_value()
-	    #       "zimbramailcanonicaladdress" => ["placeholder.."]
-	    "zimbraarchiveaccount" =>      ["placeholder.."],
-	    "amavisarchivequarantineto" => ["placeholder.."],
-#	    "zimbracosid"               => ["placeholder.."]
+	    "company" =>               ["orghomeorg"],
+
+	    "zimbramailhost" =>            \&build_zmailhost,
+	    "zimbraarchiveaccount" =>      \&build_archive_account,
+	    "amavisarchivequarantineto" => \&build_archive_account,
+	    "co" =>                        \&build_phone_fax,
+	    "street"     =>                \&build_address,
 	};
     }
 
@@ -856,8 +842,29 @@ sub get_z2l($) {
     
 
 ######
+sub build_phone_fax($) {
+    my $lu = shift;
+
+    return "Phone: " . $lu->get_value("orgworktelephone") . " Fax: " . 
+	$lu->get_value("orgworkfax");
+}
+
+
+######
+sub build_address($) {
+    my $lu = shift;
+
+    return $lu->get_value("orgworkstreet");
+
+}
+
+
+######
 sub build_zmailhost($) {
-    my $org_id = shift;
+#    my $org_id = shift;
+    my $lu = shift;
+
+    my $org_id = $lu->get_value("orgghrsintemplidno");
 
     if (!defined $org_id) {
 	print "WARNING! undefined SDP id, zimbraMailHost will be undefined\n";
@@ -1008,23 +1015,20 @@ sub fix_case($) {
 
 
 ######
+# ignore argument
+sub get_z_archive_mailhost($) {
+
+    return $archive_mailhost;
+}
+
+######
 sub build_target_z_value($$$) {
     my ($lu, $zattr, $z2l) = @_;
 
-    # hacks to get through a deadline
-    return build_zmailhost($lu->get_value("orgghrsintemplidno"))
-	if ($zattr eq "zimbramailhost");
-
-#    return $lu->get_value("uid") . "\@domain.org"
-#	if ($zattr eq "zimbramailcanonicaladdress");
-
-    return build_archive_account($lu)
-	if (($zattr eq "zimbraarchiveaccount") ||
-	    ($zattr eq "amavisarchivequarantineto"));
-
-    return $archive_cos_id if ($zattr eq "zimbracosid");
-    
-#    return $archive_mailhost if ($zattr eq "zimbramailhost");
+    my $t = ref($z2l->{$zattr});
+    if ($t eq "CODE") {
+	return &{$z2l->{$zattr}}($lu);
+    }
 
     my $ret = join ' ', (
 	map {
@@ -1338,6 +1342,7 @@ sub add_archive_acct {
         " for ", $lu->get_value("uid"), "\n";
 #    $all_users->{(split /\@/, $archive_account)[0]} = 1;
     $all_users->{$archive_account} = 1;
+
     my $d3 = new XmlDoc;
     $d3->start('CreateAccountRequest', $MAILNS);
     $d3->add('name', $MAILNS, undef, $archive_account);
@@ -1346,14 +1351,10 @@ sub add_archive_acct {
     for my $zattr (sort keys %$z2l) {
 	my $v;
 
-	if ($zattr eq "zimbramailhost") {
-	    $v = $archive_mailhost;
-	} else {
-	    $v = build_target_z_value($lu, $zattr, $z2l);
-	}
+	$v = build_target_z_value($lu, $zattr, $z2l);
 
 	if (!defined($v)) {
-	    print "unable to build value for $zattr, skipping..\n";
+	    print "ERROR: unable to build value for $zattr, skipping..\n";
 	    next;
 	}
 	
