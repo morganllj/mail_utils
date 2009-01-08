@@ -26,19 +26,22 @@ use lib "/usr/local/zcs-5.0.2_GA_1975-src/ZimbraServer/src/perl/soap";
 use POSIX ":sys_wait_h";
 # these accounts will never be added, removed or modified
 #   It's a perl regex
-my $zimbra_special = 
-    '^admin|wiki|spam\.[a-z]+|ham\.[a-z]+|'. # Zimbra supplied
-               # accounts. This will cause you trouble if you have users that 
-               # start with ham or spam  For instance: ham.let.  Unlikely 
-               # perhaps.
-#    'ser|'.'mlehmann|gab|morgan|cferet|'.  
-               # Steve, Matt, Gary, Feret and I
-    'calendar-admin|'.        # org calendar admin user
-#    'noreply|'.              # noreply: used as from address in broadcast msgs.
-    'donotreply|'.            # noreply: used as from address in broadcast msgs.
-    'smmsp|orgadminuser|'.
-    'besadmin|'.
-    'hammy|spammy$';          # Spam training users 
+my $exclude_group_rdn = "cn=orgexcludes";  # assumed to be in $ldap_base
+
+# my $zimbra_special = 
+#     '^admin|wiki|spam\.[a-z]+|ham\.[a-z]+|'. # Zimbra supplied
+#                # accounts. This will cause you trouble if you have users that 
+#                # start with ham or spam  For instance: ham.let.  Unlikely 
+#                # perhaps.
+# #    'ser|'.'mlehmann|gab|morgan|cferet|'.  
+#                # Steve, Matt, Gary, Feret and I
+#     'calendar-admin|'.        # org calendar admin user
+# #    'noreply|'.              # noreply: used as from address in broadcast msgs.
+#     'donotreply|'.            # noreply: used as from address in broadcast msgs.
+#     'smmsp|orgadminuser|'.
+#     'besadmin|'.
+#     'hammy|spammy$';          # Spam training users 
+
 # run case fixing algorithm (fix_case()) on these attrs.
 #   Basically upcase after spaces and certain chars
 my @z_attrs_2_fix_case = qw/cn displayname sn givenname/;
@@ -52,11 +55,13 @@ my @z2l_literals = qw/( )/;
 # 5 == aaaaa*
 my $max_recurse = 5;
 
+# Number of processes to run simultaneously.
 # I've only tested parallelism <= 4.  I have seen this script crash a
 # system due to multiprocessing overhead of probably perl fork().  I
 # would suggest you test larger numbers for $parallelism on a
 # development system..
-my $parallelism = 4;  # number of processes to run simultaneously.
+my $parallelism = 4;
+my $users_per_proc = 1000;
 
 # hostname for zimbra store.  It can be any of your stores.
 # it can be overridden on the command line.
@@ -125,6 +130,9 @@ sub delete_not_in_ldap();
 sub delete_in_range($$$);
 sub parse_and_del($);
 sub renew_context();
+sub in_exclude_list($);
+sub get_exclude_list();
+
 
 my $opts;
 getopts('hl:D:w:b:em:ndz:s:p:a', \%$opts);
@@ -187,7 +195,10 @@ print "\nstarting at ", `date`;
 # bind to ldap
 my $ldap = Net::LDAP->new($ldap_host);
 my $rslt = $ldap->bind($binddn, password => $bindpass);
-$rslt->code && die "unable to bind as $binddn: $rslt->error";
+$rslt->code && die "unable to bind as ", $binddn, ": ", $rslt->error;
+
+my @exclude_list = get_exclude_list();  # this must be run before
+					# in_exclude_list
 
 my $context = get_zimbra_context();
 
@@ -206,39 +217,50 @@ my $parent_pid; # used by check_context_invoke in the children: it
 		# needs to know the proc to kill to tell the parent to
 		# reload a stale $context
 
-for my $lusr ($rslt->entries) {
-     my $usr;
-     if ($multi_domain_mode) {
- 	$usr = lc $lusr->get_value("mail");
-     } else {
- 	$usr = lc $lusr->get_value("uid") . "@" . $default_domain
-     }
+my $sleep_count=0;
+my $usrs;
 
-     # if $usr is undefined or empty there is likely no mail attribute: 
-     # get the uid attribute and concatenate the default domain
-     if (!defined $usr || $usr =~ /^\s*$/) {
+for my $lusr ($rslt->entries) {
+    my $usr;
+
+    if ($multi_domain_mode) {
+ 	$usr = lc $lusr->get_value("mail");
+    } else {
+ 	$usr = lc $lusr->get_value("uid") . "@" . $default_domain
+    }
+
+    # if $usr is undefined or empty there is likely no mail attribute: 
+    # get the uid attribute and concatenate the default domain
+    if (!defined $usr || $usr =~ /^\s*$/) {
  	# concat the default domain if user doesn't have one--this is
  	# to catch users with out a mail attribute.
  	$usr = $lusr->get_value("uid") . "@" . $zimbra_domain;
-     }
+    }
 
-     if (defined $subset_str) {
+    if (defined $subset_str) {
  	my $username = (split /\@/, $usr)[0];
 
- 	#next unless exists ($subset->{$usr});
  	next unless (exists ($subset->{$username}) ||
  		     exists ($subset->{$usr}));
-     }
+    }
 
-     $all_users->{$usr} = 1;
+    $all_users->{$usr} = 1;
 
-     # skip special users
-     if ($usr =~ /$zimbra_special/) {
+    # skip users in ldap exclude list
+    #   TODO: describe format of exclude list above
+    #     should there be an option to skip checking for the exclude
+    #     list?
+    #if ($usr =~ /$zimbra_special/) {
+    if (in_exclude_list($usr)) {
  	print "skipping special user $usr\n"
  	    if (exists $opts->{d});
  	next;
-     }
-    
+    }
+
+    if (keys %$usrs < $users_per_proc) {
+	$usrs->{$usr} = $lusr;
+	next;
+    }
     
     my $proc_running = 0;  # flag to indicate a process has been started.
 
@@ -248,29 +270,33 @@ for my $lusr ($rslt->entries) {
 	print "pidcount: $pidcount, parallelism: $parallelism\n"
 	    if (exists $opts->{d});
 	if ($pidcount < $parallelism) {
-	    print "\nworking on ", $usr, " ($pidcount) ", `date`
-		if (exists $opts->{d});
+	    $sleep_count = 0;
+# 	    print "\nworking on ", $usr, " ($pidcount) ", `date`
+# 		if (exists $opts->{d});
 
 	    $parent_pid = $$;
 
 	    my $pid = fork();
 	    
 	    if (defined($pid) && $pid == 0) {
- 		### check for a corresponding zimbra account
-   		my $zu_h = get_z_user($usr);
-   		if (!defined $zu_h) {
-   		    add_user($lusr);
-   		} else {
-   		    sync_user($zu_h, $lusr)
-   		}
-
-		$ldap->unbind();
+		for my $u (keys %$usrs) {
+		    print "\nworking on ", $u, " ($$) ", `date`
+			if (exists $opts->{d});
+		    ### check for a corresponding zimbra account
+		    my $zu_h = get_z_user($u);
+		    if (!defined $zu_h) {
+			add_user($usrs->{$u});
+		    } else {
+			sync_user($zu_h, $usrs->{$u})
+		    }
+		}
+		#$ldap->unbind();
 		exit 0;
 	    } elsif (defined($pid) && $pid > 0) {
 		$pids->{$pid} = 1;
 		$proc_running++;
 	    } else {
-		# TODO: count number of failures and fail after a count.
+		# TODO: count number of fork() failures and fail after a count.
 		print "problem forking!? Sleeping and retrying..\n";
 		sleep 1;
 		next;
@@ -294,12 +320,19 @@ for my $lusr ($rslt->entries) {
 	    #   but keeps us from busy waiting if all the processes
 	    #   are busy.
 	    unless ($proc_reclaimed) {
-		print "sleeping: no processes reclaimed...\n"
+
+		print "sleeping ", $sleep_count, ": no processes reclaimed...\n"
 		    if (exists $opts->{d});
-		sleep 1;
+		sleep $sleep_count;
+		$sleep_count += 5;
+
+# 		if ($sleep_count > 15) {
+# 		    die "sleep_count is too high!  Aborting..";
+# 		}
 	    }
 	}
     } until ($proc_running);
+    $usrs = undef;
 }
 
 # delete accounts that are not in ldap
@@ -561,6 +594,77 @@ sub build_archive_account($) {
 }
 
 
+######
+sub get_exclude_list() {
+    
+    my $r = $ldap->search(base => $ldap_base, filter => $exclude_group_rdn);
+    $r->code && die "problem retrieving exclude list:" . $rslt->error;
+
+    my @e = $r->entries;  # do we need to check for multiple entries?
+
+    if ($#e != 0) {
+	print "more than one entry found for $exclude_group_rdn:\n";
+	for my $lu (@e) {
+	    print "dn: ", $lu->dn(), "\n";
+	}
+	die;
+    }
+
+    my $exclude = $e[0];
+
+    return $exclude->get_value("uniquemember");
+}
+
+
+######
+# @exclude_list *must* be populated before this is run.
+sub in_exclude_list($) {
+    my $u = shift;
+    
+#     my $r = $ldap->search(base => $ldap_base, filter => $exclude_group_rdn);
+#     $r->code && die "problem retrieving exclude list:" . $rslt->error;
+
+#     my @e = $r->entries;  # do we need to check for multiple entries?
+
+#     if ($#e != 0) {
+# 	print "more than one entry found for $exclude_group_rdn:\n";
+# 	for my $lu (@e) {
+# 	    print "dn: ", $lu->dn(), "\n";
+# 	}
+# 	die;
+#     }
+
+#     my $exclude = $e[0];
+#     my @ex = $exclude->get_value("uniquemember");
+
+    
+#     for my $ex (@ex) {
+# 	unless ($multi_domain_mode) {
+# 	    $ex = (split(/\@/, $ex))[0];
+# 	    $u  = (split(/\@/, $u))[0];
+# 	}
+
+# 	return 1
+# 	    if (lc($ex) eq lc($u));
+#     }
+
+#     return 0;
+
+    
+    for my $ex (@exclude_list) {
+	unless ($multi_domain_mode) {
+	    $ex = (split(/\@/, $ex))[0];
+	    $u  = (split(/\@/, $u))[0];
+	}
+	
+	return 1
+	    if (lc($ex) eq lc($u));
+    }
+    
+    return 0;
+}
+
+
 #####
 # takes an argument because all subs called out of get_z2l have to.
 # It ignores the argument.
@@ -806,6 +910,25 @@ sub get_z2l($) {
     # rhs and built_target_zimbra_value will run that sub instead of
     # mapping to ldap attributes.
 
+
+
+
+    # SDP mapping:
+    # zimbra       ULC/AMS         Example       LDAP
+    # street       ULC-SUP-NAME-2 ULC-SUPPLY-ST-ADD  
+    #                              4th Floor - Suite 404 440 N. Broad Street
+    #                                            orgWorkStreetShort (*proposed*)
+    #              ULC-STATE-CODE  PA            orgWorkState
+    #              ULC-CITY        Philadelphia  orgWorkCity
+    #              ULC-SUPPLY-ZIP  19130         orgWorkZip
+    # *displayname                 Levov, Sylvia sn, givenname
+    # *zimbrapreffromdisplay
+    #                              Levov, Sylvia sn, givenname
+    # company      ORG-LONG-DD                   orgHomeOrg
+    # co           ULC-AREA-CD ULC-PHONE-NUM ULC-FAX-AREA-CD ULC-FAX-NUM
+    #                              Phone: 215.400.1234 Fax: 215.400.3456
+    #                                            orgWorkTelephone orgWorkFax
+
     my $z2l;
     if (defined $type && $type eq "archive") {
 	# TODO: build_target_z_value can't handle literals..
@@ -845,8 +968,21 @@ sub get_z2l($) {
 sub build_phone_fax($) {
     my $lu = shift;
 
-    return "Phone: " . $lu->get_value("orgworktelephone") . " Fax: " . 
-	$lu->get_value("orgworkfax");
+    my $r = undef;
+
+    if (defined (my $p = $lu->get_value("orgworktelephone"))) {
+	$r .= "Phone: " . $p; 
+    }
+
+    if (defined (my $f = $lu->get_value("orgworkfax"))) {
+	$r .= " " if (defined $r);
+	$r .= "Fax: " . $f;
+    }
+
+#     return "Phone: " . $lu->get_value("orgworktelephone") . " Fax: " . 
+# 	$lu->get_value("orgworkfax");
+
+    return $r;
 }
 
 
@@ -1110,10 +1246,6 @@ sub check_context_invoke {
 
     my $r = $SOAP->invoke($url, $d->root(), $$context_ref);
 
-
-
-
-
     if ($r->name eq "Fault") {
 	my $rsn = get_fault_reason($r);
 	if (defined $rsn && $rsn =~ /AUTH_EXPIRED/) {
@@ -1252,7 +1384,8 @@ sub parse_and_del($) {
  	}
 
 	# skip special users
-	if ($uid =~ /$zimbra_special/) {
+#	if ($uid =~ /$zimbra_special/) {
+        if (in_exclude_list($uid)) {
 	    print "\tskipping special user $uid\n"
 		if (exists $opts->{d});
 	    next;
@@ -1260,9 +1393,10 @@ sub parse_and_del($) {
 
 #  	if (defined $uid && defined $z_id && 
 # 	    !exists $all_users->{$uid} && $uid !~ $zimbra_special) {
+# 	if (defined $mail && defined $z_id && 
+#	    !exists $all_users->{$mail} && $uid !~ $zimbra_special) {
  	if (defined $mail && defined $z_id && 
-	    !exists $all_users->{$mail} && $uid !~ $zimbra_special) {
-
+	    !exists $all_users->{$mail}) {
 
 	    if (defined $subset_str) {
 		next unless (exists($subset->{$uid}) || 
