@@ -10,7 +10,7 @@
 # Zimbra.  attributes mastered by Zimbra do not go to LDAP.
 
 
-# TODO: move and generalize get_z2l()
+# TODO:
 #       generalize build_zmailhost()
 #       correct hacks.  Search in script for "hack."
 
@@ -24,23 +24,10 @@
 # source code to get them.
 use lib "/usr/local/zcs-5.0.2_GA_1975-src/ZimbraServer/src/perl/soap";
 use POSIX ":sys_wait_h";
+use IO::Handle;
 # these accounts will never be added, removed or modified
 #   It's a perl regex
 my $exclude_group_rdn = "cn=orgexcludes";  # assumed to be in $ldap_base
-
-# my $zimbra_special = 
-#     '^admin|wiki|spam\.[a-z]+|ham\.[a-z]+|'. # Zimbra supplied
-#                # accounts. This will cause you trouble if you have users that 
-#                # start with ham or spam  For instance: ham.let.  Unlikely 
-#                # perhaps.
-# #    'ser|'.'mlehmann|gab|morgan|cferet|'.  
-#                # Steve, Matt, Gary, Feret and I
-#     'calendar-admin|'.        # org calendar admin user
-# #    'noreply|'.              # noreply: used as from address in broadcast msgs.
-#     'donotreply|'.            # noreply: used as from address in broadcast msgs.
-#     'smmsp|orgadminuser|'.
-#     'besadmin|'.
-#     'hammy|spammy$';          # Spam training users 
 
 # run case fixing algorithm (fix_case()) on these attrs.
 #   Basically upcase after spaces and certain chars
@@ -56,11 +43,14 @@ my @z2l_literals = qw/( )/;
 my $max_recurse = 5;
 
 # Number of processes to run simultaneously.
-# I've only tested parallelism <= 4.  I have seen this script crash a
-# system due to multiprocessing overhead of probably perl fork().  I
-# would suggest you test larger numbers for $parallelism on a
-# development system..
-my $parallelism = 4;
+# I've only tested parallelism <= 4. 
+# would suggest you test larger numbers for $parallelism and
+# $users_per_proc on a development system..
+my $parallelism = 2;
+# number of users to process per fork.  If this number is too low the
+# overhead of perl fork() can lock a Linux system solid.  I suggest
+# keeping this > 50.
+
 my $users_per_proc = 1000;
 
 # hostname for zimbra store.  It can be any of your stores.
@@ -98,8 +88,8 @@ my $default_ldap_base    = "dc=domain,dc=org";
 my $default_ldap_bind_dn = "cn=Directory Manager";
 my $default_ldap_pass    = "pass";
 # good for testing/debugging:
-# my $default_ldap_filter = 
-#   "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
+#my $default_ldap_filter = 
+#  "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
 # my $default_ldap_filter = "(orghomeorgcd=9500)";
 #
 # production:
@@ -132,6 +122,7 @@ sub parse_and_del($);
 sub renew_context();
 sub in_exclude_list($);
 sub get_exclude_list();
+sub build_archive_account($);
 
 
 my $opts;
@@ -220,8 +211,17 @@ my $parent_pid; # used by check_context_invoke in the children: it
 my $sleep_count=0;
 my $usrs;
 
-for my $lusr ($rslt->entries) {
+my @ldap_entries = $rslt->entries;
+print "$#ldap_entries entries to process..\n"
+    if (exists $opts->{d});
+
+my $users_left = $#ldap_entries + 1;
+
+#for my $lusr ($rslt->entries) {
+for my $lusr (@ldap_entries) {
     my $usr;
+
+    $users_left--;
 
     if ($multi_domain_mode) {
  	$usr = lc $lusr->get_value("mail");
@@ -250,7 +250,6 @@ for my $lusr ($rslt->entries) {
     #   TODO: describe format of exclude list above
     #     should there be an option to skip checking for the exclude
     #     list?
-    #if ($usr =~ /$zimbra_special/) {
     if (in_exclude_list($usr)) {
  	print "skipping special user $usr\n"
  	    if (exists $opts->{d});
@@ -259,10 +258,13 @@ for my $lusr ($rslt->entries) {
 
     if (keys %$usrs < $users_per_proc) {
 	$usrs->{$usr} = $lusr;
-	next;
+	next unless ($users_left < 1);  # loop around unless we're on
+					# the last user: spin off one
+					# more thread to process the
+					# remaining users.
     }
     
-    my $proc_running = 0;  # flag to indicate a process has been started.
+    my $proc_running = 0;  # indicates a process has been started.
 
     do {
 	my $pidcount = keys %$pids;
@@ -271,10 +273,17 @@ for my $lusr ($rslt->entries) {
 	    if (exists $opts->{d});
 	if ($pidcount < $parallelism) {
 	    $sleep_count = 0;
-# 	    print "\nworking on ", $usr, " ($pidcount) ", `date`
-# 		if (exists $opts->{d});
 
 	    $parent_pid = $$;
+
+	    pipe(PARENT_RDR, CHILD_WTR);  # open a pipe to get output
+					  # from the child.. right now
+					  # we're just interested in
+					  # the archive account that
+					  # was generated so it can be
+					  # added to $all_users and
+					  # not be deleted during the
+					  # delete phase.
 
 	    my $pid = fork();
 	    
@@ -290,10 +299,11 @@ for my $lusr ($rslt->entries) {
 			sync_user($zu_h, $usrs->{$u})
 		    }
 		}
-		#$ldap->unbind();
+		close(CHILD_WTR);
 		exit 0;
 	    } elsif (defined($pid) && $pid > 0) {
 		$pids->{$pid} = 1;
+		$pids->{$pid} = *PARENT_RDR;
 		$proc_running++;
 	    } else {
 		# TODO: count number of fork() failures and fail after a count.
@@ -305,13 +315,22 @@ for my $lusr ($rslt->entries) {
 	} else {
 	    my $proc_reclaimed = 0;
 	    for my $p (keys %$pids) {
+ 		my $fh = $pids->{$p};
+		my $from_child = <$fh>;
+		chomp $from_child;
+		print "from child $p: /$from_child/\n"
+  			if (exists $opts->{d});
+		$all_users->{$from_child} = 1;
+		
 		my $ret = waitpid(-1, WNOHANG);
 
 		if ($ret<0 || $ret>0) {
 		    print "process $ret finished..\n"
 			if (exists $opts->{d});
+		    close $pids->{$ret};
 		    delete $pids->{$ret};
 		    $proc_reclaimed = 1;
+		    print "proc reclaimed..\n";
 		} 
 	    }
 
@@ -326,6 +345,8 @@ for my $lusr ($rslt->entries) {
 		sleep $sleep_count;
 		$sleep_count += 5;
 
+# TODO: revisit this.. it really shouldn't happen but it will cause an
+# infinite loop if it does.
 # 		if ($sleep_count > 15) {
 # 		    die "sleep_count is too high!  Aborting..";
 # 		}
@@ -343,9 +364,9 @@ if (exists $opts->{e}) {
     print "\ndelete phase skipped (enable with -e)\n";
 }
 
-
-# sync archive accounts.  We do this last as it roughly doubles the
+# sync archive accounts.  We do this last as it more than doubles the
 # run time of the script and it's not critical.
+# TODO: parallelize this?
 if (exists $opts->{a}) {
     print "\nsyncing archives, ", `date`;
     for my $acct_name (keys %$archive_accts) {
@@ -364,7 +385,6 @@ if (exists $opts->{a}) {
 ### get a list of zimbra accounts, compare to ldap accounts, delete
 ### zimbra accounts no longer in LDAP.
 
-
 print "\nfinished at ", `date`;
 $rslt = $ldap->unbind;
 
@@ -381,6 +401,7 @@ sub add_user($) {
     my $z2l = get_z2l();
 
     # org hack
+    # TODO: define a 'required' attribute in user definable section above.
     unless (defined build_target_z_value($lu, "orgghrsintemplidno", $z2l)) {
 	print "\t***no orgghrsintemplidno, not adding.\n";
 	return;
@@ -521,11 +542,9 @@ sub add_user($) {
 	      $mail);
       $d->end();
 
-      #my $r = $SOAP->invoke($url, $d->root(), $context);
       my $r = check_context_invoke($d, \$context);
 
       if ($r->name eq "Fault") {
-	  #my $rsn = get_fault_reason($r2);
 	  print "fault while delegating auth to $mail:\n";
 	  print Dumper($r);
 	  print "calendar $cal_name will not be added.\n";
@@ -621,36 +640,6 @@ sub get_exclude_list() {
 sub in_exclude_list($) {
     my $u = shift;
     
-#     my $r = $ldap->search(base => $ldap_base, filter => $exclude_group_rdn);
-#     $r->code && die "problem retrieving exclude list:" . $rslt->error;
-
-#     my @e = $r->entries;  # do we need to check for multiple entries?
-
-#     if ($#e != 0) {
-# 	print "more than one entry found for $exclude_group_rdn:\n";
-# 	for my $lu (@e) {
-# 	    print "dn: ", $lu->dn(), "\n";
-# 	}
-# 	die;
-#     }
-
-#     my $exclude = $e[0];
-#     my @ex = $exclude->get_value("uniquemember");
-
-    
-#     for my $ex (@ex) {
-# 	unless ($multi_domain_mode) {
-# 	    $ex = (split(/\@/, $ex))[0];
-# 	    $u  = (split(/\@/, $u))[0];
-# 	}
-
-# 	return 1
-# 	    if (lc($ex) eq lc($u));
-#     }
-
-#     return 0;
-
-    
     for my $ex (@exclude_list) {
 	unless ($multi_domain_mode) {
 	    $ex = (split(/\@/, $ex))[0];
@@ -696,11 +685,8 @@ sub get_archive_account_id($) {
 
     my $mc = $r2->find_child('account');
 
-    if (defined $mc) {
-# 	print "found archive account id: ", $mc->attrs->{name}, 
-# 	    " ", $mc->attrs->{id}, "\n";
-	return $mc->attrs->{id};
-    }
+    return $mc->attrs->{id}
+        if (defined $mc);
 	
     return undef;
 }
@@ -723,7 +709,8 @@ sub sync_user($$) {
 	    add_archive_acct($lu);
 	}
     } else {
-	$all_users->{$archive_acct_name} = 1;
+	#$all_users->{$archive_acct_name} = 1;
+	print CHILD_WTR "$archive_acct_name\n";
 
 	# store the archive account name and the ldap user object for
 	# later syncing.
@@ -834,17 +821,12 @@ sub find_and_apply_user_diffs {
     $d->end();
 
     if ($diff_found) {
-
-# 	print "\n" if (!exists $opts->{d});
-# 	print "syncing ", (@{$zu->{mail}})[0], "\n";
-
 	my $o;
 	$o = $d->to_string("pretty");
 	$o =~ s/ns0\://g;
 	print $o;
 
 	if (!exists $opts->{n}) {
-	    # my $r = $SOAP->invoke($url, $d->root(), $context);
 	    my $r = check_context_invoke($d, \$context);
 
 	    if (exists $opts->{d}) {
@@ -911,27 +893,27 @@ sub get_z2l($) {
     # mapping to ldap attributes.
 
 
-
-
     # SDP mapping:
     # zimbra       ULC/AMS         Example       LDAP
+    # -----------------------------------------------
     # street       ULC-SUP-NAME-2 ULC-SUPPLY-ST-ADD  
     #                              4th Floor - Suite 404 440 N. Broad Street
     #                                            orgWorkStreetShort (*proposed*)
-    #              ULC-STATE-CODE  PA            orgWorkState
-    #              ULC-CITY        Philadelphia  orgWorkCity
-    #              ULC-SUPPLY-ZIP  19130         orgWorkZip
-    # *displayname                 Levov, Sylvia sn, givenname
-    # *zimbrapreffromdisplay
+    # st           ULC-STATE-CODE  PA            orgWorkState
+    # l            ULC-CITY        Philadelphia  orgWorkCity
+    # postalCode   ULC-SUPPLY-ZIP  19130         orgWorkZip
+    # displayname                 Levov, Sylvia sn, givenname
+    # zimbrapreffromdisplay
     #                              Levov, Sylvia sn, givenname
     # company      ORG-LONG-DD                   orgHomeOrg
     # co           ULC-AREA-CD ULC-PHONE-NUM ULC-FAX-AREA-CD ULC-FAX-NUM
     #                              Phone: 215.400.1234 Fax: 215.400.3456
     #                                            orgWorkTelephone orgWorkFax
+    # zimbramailhost
+    # zimbracosid
 
     my $z2l;
     if (defined $type && $type eq "archive") {
-	# TODO: build_target_z_value can't handle literals..
 	$z2l = {
 	    "zimbramailhost" => \&get_z_archive_mailhost,
 	    "zimbracosid"    => \&get_archive_cos_id,
@@ -944,25 +926,44 @@ sub get_z2l($) {
 	    "zimbrapreffromdisplay" => ["givenname", "sn"],
 	    "givenname" =>             ["givenname"],
 	    "sn" =>                    ["sn"],
-	    "displayname" =>           ["givenname", "sn"],
 	    "company" =>               ["orghomeorg"],
+	    "st" =>                    ["orgworkstate"],
+	    "l" =>                     ["orgworkcity"],
+	    "postalcode" =>            ["orgworkzip"],
 
 	    "zimbramailhost" =>            \&build_zmailhost,
 	    "zimbraarchiveaccount" =>      \&build_archive_account,
 	    "amavisarchivequarantineto" => \&build_archive_account,
 	    "co" =>                        \&build_phone_fax,
-	    "street"     =>                \&build_address,
+	    "street" =>                    \&build_address,
+	    "displayname" =>               \&build_last_first,
+            "zimbrapreffromdisplay" =>     \&build_last_first,
 	};
     }
 
     return $z2l;
-
-
-
-# A15 ULC-SHORT-NAME          /TELECOM & NTWRK/
-#  Telecom & Ntwrk
 }
-    
+
+
+sub build_last_first($) {
+    my $lu = shift;
+
+    my $r = undef;
+
+    if (defined (my $l = $lu->get_value("sn"))) {
+	$r .= $l;
+    }
+
+    if (defined (my $f = $lu->get_value("givenname"))) {
+	$r .= ", " if (defined $r);
+	$r .= $f;
+    }
+
+    return $r;
+}
+
+
+
 
 ######
 sub build_phone_fax($) {
@@ -971,11 +972,13 @@ sub build_phone_fax($) {
     my $r = undef;
 
     if (defined (my $p = $lu->get_value("orgworktelephone"))) {
+	$p =~ s/(\d{3})(\d{3})(\d{4})/$1\.$2\.$3/;
 	$r .= "Phone: " . $p; 
     }
 
     if (defined (my $f = $lu->get_value("orgworkfax"))) {
 	$r .= " " if (defined $r);
+	$f =~ s/(\d{3})(\d{3})(\d{4})/$1\.$2\.$3/;
 	$r .= "Fax: " . $f;
     }
 
@@ -997,7 +1000,6 @@ sub build_address($) {
 
 ######
 sub build_zmailhost($) {
-#    my $org_id = shift;
     my $lu = shift;
 
     my $org_id = $lu->get_value("orgghrsintemplidno");
@@ -1384,17 +1386,12 @@ sub parse_and_del($) {
  	}
 
 	# skip special users
-#	if ($uid =~ /$zimbra_special/) {
         if (in_exclude_list($uid)) {
 	    print "\tskipping special user $uid\n"
 		if (exists $opts->{d});
 	    next;
 	}
 
-#  	if (defined $uid && defined $z_id && 
-# 	    !exists $all_users->{$uid} && $uid !~ $zimbra_special) {
-# 	if (defined $mail && defined $z_id && 
-#	    !exists $all_users->{$mail} && $uid !~ $zimbra_special) {
  	if (defined $mail && defined $z_id && 
 	    !exists $all_users->{$mail}) {
 
@@ -1475,7 +1472,8 @@ sub add_archive_acct {
     print "adding archive: ", $archive_account,
         " for ", $lu->get_value("uid"), "\n";
 #    $all_users->{(split /\@/, $archive_account)[0]} = 1;
-    $all_users->{$archive_account} = 1;
+    #$all_users->{$archive_account} = 1;
+    print CHILD_WTR "$archive_account\n";
 
     my $d3 = new XmlDoc;
     $d3->start('CreateAccountRequest', $MAILNS);
