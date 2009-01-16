@@ -38,14 +38,14 @@ getopts('dna:p:z:', \%$opts);
 
 my $alias_files = $opts->{a} || print_usage();
 my $zimbra_pass = $opts->{p} || "pass";
-my $zimbra_svr  = $opts->{z} || "dmail01.domain.org";
+my $zimbra_svr  = $opts->{z} || "mail01.domain.org";
 
 $|=1;
 
-my $default_domain = "dev.domain.org";
+my $default_domain = "domain.org";
 # name of the host/domain where list software is running
 #   all aliases with '|' will be forwarded there
-my $list_mgmt_host = "dlists.domain.org";
+my $list_mgmt_host = "lists.domain.org";
 
 
 ################
@@ -279,17 +279,17 @@ sub update_z_list($@) {
     
 
     # should we pass the type here since we're determining it anyway?
-    if (defined $mail) {
-	# add an alias/forward
-	delete_z_list($l, $existing_type)
-	    if ($existing_type ne "alias");
-	add_z_list("alias", $l, @contents);
-    } else { # $#contents > -1 or $#contents == -1
+#     if (defined $mail) {
+# 	# add an alias/forward
+# 	delete_z_list($l, $existing_type)
+# 	    if ($existing_type ne "alias");
+# 	add_z_list("alias", $l, @contents);
+#     } else { # $#contents > -1 or $#contents == -1
 	# add a dist list
 	delete_z_list($l, $existing_type);
 	add_z_list("distributionlist", $l, @contents)
 	    if ($existing_type ne "dist_list");
-    }
+#    }
 }
 
 

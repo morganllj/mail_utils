@@ -44,14 +44,13 @@ my $max_recurse = 5;
 
 # Number of processes to run simultaneously.
 # I've only tested parallelism <= 4. 
-# would suggest you test larger numbers for $parallelism and
+# I suggest you test larger numbers for $parallelism and
 # $users_per_proc on a development system..
-my $parallelism = 2;
+my $parallelism = 4;
 # number of users to process per fork.  If this number is too low the
 # overhead of perl fork() can lock a Linux system solid.  I suggest
 # keeping this > 50.
-
-my $users_per_proc = 1000;
+my $users_per_proc = 100;
 
 # hostname for zimbra store.  It can be any of your stores.
 # it can be overridden on the command line.
@@ -90,6 +89,7 @@ my $default_ldap_pass    = "pass";
 # good for testing/debugging:
 #my $default_ldap_filter = 
 #  "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
+#    "(orghomeorgcd=9500)";
 # my $default_ldap_filter = "(orghomeorgcd=9500)";
 #
 # production:
@@ -212,7 +212,7 @@ my $sleep_count=0;
 my $usrs;
 
 my @ldap_entries = $rslt->entries;
-print "$#ldap_entries entries to process..\n"
+print $#ldap_entries + 1, " entries to process..\n"
     if (exists $opts->{d});
 
 my $users_left = $#ldap_entries + 1;
@@ -231,12 +231,15 @@ for my $lusr (@ldap_entries) {
 
     # if $usr is undefined or empty there is likely no mail attribute: 
     # get the uid attribute and concatenate the default domain
-    if (!defined $usr || $usr =~ /^\s*$/) {
- 	# concat the default domain if user doesn't have one--this is
- 	# to catch users with out a mail attribute.
- 	$usr = $lusr->get_value("uid") . "@" . $zimbra_domain;
-    }
+    $usr = $lusr->get_value("uid") . "@" . $zimbra_domain
+	if (!defined $usr || $usr =~ /^\s*$/);
 
+    # keep track of users as we work on them so we can decide who to
+    # delete later on.
+    $all_users->{$usr} = 1;
+
+    # skip user if a subset was defined on the command line and this
+    # user is not part of it.
     if (defined $subset_str) {
  	my $username = (split /\@/, $usr)[0];
 
@@ -244,37 +247,45 @@ for my $lusr (@ldap_entries) {
  		     exists ($subset->{$usr}));
     }
 
-    $all_users->{$usr} = 1;
-
     # skip users in ldap exclude list
     #   TODO: describe format of exclude list above
     #     should there be an option to skip checking for the exclude
     #     list?
-    if (in_exclude_list($usr)) {
- 	print "skipping special user $usr\n"
- 	    if (exists $opts->{d});
- 	next;
-    }
 
-    if (keys %$usrs < $users_per_proc) {
-	$usrs->{$usr} = $lusr;
-	next unless ($users_left < 1);  # loop around unless we're on
-					# the last user: spin off one
-					# more thread to process the
-					# remaining users.
-    }
-    
+      if (in_exclude_list($usr)) {
+   	print "skipping special user $usr\n"
+   	    if (exists $opts->{d});
+   	next;
+      }
+
+    # batch users before continuing and forking.
+    $usrs->{$usr} = $lusr;
+
+    # loop unless we have $users_per_proc batched or we're out of users
+    next
+	if (keys %$usrs < $users_per_proc && $users_left != 0);
+    print "heading for do..\n";
+
     my $proc_running = 0;  # indicates a process has been started.
+    my $pidcount = 0;      # number of running processes.
+    
 
     do {
-	my $pidcount = keys %$pids;
+	$pidcount = keys %$pids;
 
-	print "pidcount: $pidcount, parallelism: $parallelism\n"
-	    if (exists $opts->{d});
+ 	print "pidcount: $pidcount, parallelism: $parallelism\n"
+ 	    if (exists $opts->{d});
+
+	# fork a process if there are less than $parallelism processes
+	# running and there are users left to process.
+
 	if ($pidcount < $parallelism) {
-	    $sleep_count = 0;
+	    $sleep_count = 1;
 
 	    $parent_pid = $$;
+
+	    local (*PARENT_RDR);
+	    local (*CHILD_WTR);
 
 	    pipe(PARENT_RDR, CHILD_WTR);  # open a pipe to get output
 					  # from the child.. right now
@@ -284,10 +295,17 @@ for my $lusr (@ldap_entries) {
 					  # added to $all_users and
 					  # not be deleted during the
 					  # delete phase.
+	    CHILD_WTR->autoflush(1);
+
+	    if (!defined *PARENT_RDR || !defined *CHILD_WTR) {
+		print "undefined pipe!?  Retrying..\n";
+		next ;
+	    }
 
 	    my $pid = fork();
 	    
 	    if (defined($pid) && $pid == 0) {
+		close (PARENT_RDR);
 		for my $u (keys %$usrs) {
 		    print "\nworking on ", $u, " ($$) ", `date`
 			if (exists $opts->{d});
@@ -299,12 +317,19 @@ for my $lusr (@ldap_entries) {
 			sync_user($zu_h, $usrs->{$u})
 		    }
 		}
+		print CHILD_WTR "\n";
 		close(CHILD_WTR);
-		exit 0;
+		$SIG{USR1} = sub { print "process $$ exiting.."; exit 0;};
+		sleep;
+		#exit 0;
 	    } elsif (defined($pid) && $pid > 0) {
-		$pids->{$pid} = 1;
+		print "proc forked..\n";
+		# $usrs has been passed to the child, clear it.
+		$usrs = undef;
+		close (CHILD_WTR);
 		$pids->{$pid} = *PARENT_RDR;
 		$proc_running++;
+		$pidcount++;
 	    } else {
 		# TODO: count number of fork() failures and fail after a count.
 		print "problem forking!? Sleeping and retrying..\n";
@@ -312,16 +337,29 @@ for my $lusr (@ldap_entries) {
 		next;
 	    }
 
-	} else {
+	}# else {
+	if ($pidcount == $parallelism || $users_left == 0) {
 	    my $proc_reclaimed = 0;
+
 	    for my $p (keys %$pids) {
- 		my $fh = $pids->{$p};
-		my $from_child = <$fh>;
-		chomp $from_child;
-		print "from child $p: /$from_child/\n"
-  			if (exists $opts->{d});
-		$all_users->{$from_child} = 1;
-		
+		my $fh = $pids->{$p};
+		if (defined $fh) {
+		    my $from_child = <$fh>;
+
+		    # if $fh has nothing in it, $from_child will come
+		    # back !defined..
+		    if (defined $from_child) {
+			chomp $from_child;
+			for (split (/:/, $from_child)) {
+			    print "from child $p: /$_/\n"
+				if (exists $opts->{d});
+			}
+			$all_users->{$from_child} = 1;
+			print "killing $p w/ usr1\n";
+			kill('USR1', $p);
+		    }
+
+		}
 		my $ret = waitpid(-1, WNOHANG);
 
 		if ($ret<0 || $ret>0) {
@@ -330,7 +368,6 @@ for my $lusr (@ldap_entries) {
 		    close $pids->{$ret};
 		    delete $pids->{$ret};
 		    $proc_reclaimed = 1;
-		    print "proc reclaimed..\n";
 		} 
 	    }
 
@@ -339,35 +376,39 @@ for my $lusr (@ldap_entries) {
 	    #   but keeps us from busy waiting if all the processes
 	    #   are busy.
 	    unless ($proc_reclaimed) {
-
 		print "sleeping ", $sleep_count, ": no processes reclaimed...\n"
 		    if (exists $opts->{d});
 		sleep $sleep_count;
 		$sleep_count += 5;
 
-# TODO: revisit this.. it really shouldn't happen but it will cause an
-# infinite loop if it does.
-# 		if ($sleep_count > 15) {
-# 		    die "sleep_count is too high!  Aborting..";
-# 		}
+		# TODO: revisit this.. it really shouldn't happen but
+		# it will cause an infinite loop if it does.
+		# if ($sleep_count > 15) {
+		#    die "sleep_count is too high!  Aborting..";
+		# }
 	    }
 	}
-    } until ($proc_running);
-    $usrs = undef;
+
+     } until ($proc_running || # a process is running
+ 	     (!$proc_running && $pidcount < 1));   # or all processes
+						  # are finished
+						  # running
 }
 
-# delete accounts that are not in ldap
+
 if (exists $opts->{e}) {
+    # delete accounts that are not in ldap
     print "\ndelete phase, ",`date`;
     delete_not_in_ldap();
 } else {
     print "\ndelete phase skipped (enable with -e)\n";
 }
 
-# sync archive accounts.  We do this last as it more than doubles the
-# run time of the script and it's not critical.
-# TODO: parallelize this?
+
 if (exists $opts->{a}) {
+    # sync archive accounts.  We do this last as it more than doubles the
+    # run time of the script and it's not critical.
+    # TODO: parallelize this?
     print "\nsyncing archives, ", `date`;
     for my $acct_name (keys %$archive_accts) {
 
@@ -471,8 +512,6 @@ sub add_user($) {
 	print "found existing archive account: ",$archive_acct_name,"\n";
     }
 }
-
-
 
 
 
@@ -710,7 +749,9 @@ sub sync_user($$) {
 	}
     } else {
 	#$all_users->{$archive_acct_name} = 1;
-	print CHILD_WTR "$archive_acct_name\n";
+	print "writing existing archive to parent ($$): $archive_acct_name\n"
+	    if (exists $opts->{d});
+	print CHILD_WTR "$archive_acct_name:";
 
 	# store the archive account name and the ldap user object for
 	# later syncing.
@@ -896,16 +937,18 @@ sub get_z2l($) {
     # SDP mapping:
     # zimbra       ULC/AMS         Example       LDAP
     # -----------------------------------------------
-    # street       ULC-SUP-NAME-2 ULC-SUPPLY-ST-ADD  
+    # street       ULC-SUPPLY-ST-ADD ULC-SUP-NAME-2  
     #                              4th Floor - Suite 404 440 N. Broad Street
     #                                            orgWorkStreetShort (*proposed*)
     # st           ULC-STATE-CODE  PA            orgWorkState
     # l            ULC-CITY        Philadelphia  orgWorkCity
     # postalCode   ULC-SUPPLY-ZIP  19130         orgWorkZip
-    # displayname                 Levov, Sylvia sn, givenname
+    # displayname  ? ?             Levov, Sylvia sn, givenname
     # zimbrapreffromdisplay
+    #              ? ?
     #                              Levov, Sylvia sn, givenname
-    # company      ORG-LONG-DD                   orgHomeOrg
+    # company      ORG-LONG-DD     Technology Services
+    #                                            orgHomeOrg
     # co           ULC-AREA-CD ULC-PHONE-NUM ULC-FAX-AREA-CD ULC-FAX-NUM
     #                              Phone: 215.400.1234 Fax: 215.400.3456
     #                                            orgWorkTelephone orgWorkFax
@@ -971,19 +1014,18 @@ sub build_phone_fax($) {
 
     my $r = undef;
 
+    my $phone_separator = '-';
+
     if (defined (my $p = $lu->get_value("orgworktelephone"))) {
-	$p =~ s/(\d{3})(\d{3})(\d{4})/$1\.$2\.$3/;
+	$p =~ s/(\d{3})(\d{3})(\d{4})/$1$phone_separator$2$phone_separator$3/;
 	$r .= "Phone: " . $p; 
     }
 
     if (defined (my $f = $lu->get_value("orgworkfax"))) {
-	$r .= " " if (defined $r);
-	$f =~ s/(\d{3})(\d{3})(\d{4})/$1\.$2\.$3/;
+	$r .= "  " if (defined $r);
+	$f =~ s/(\d{3})(\d{3})(\d{4})/$1$phone_separator$2$phone_separator$3/;
 	$r .= "Fax: " . $f;
     }
-
-#     return "Phone: " . $lu->get_value("orgworktelephone") . " Fax: " . 
-# 	$lu->get_value("orgworkfax");
 
     return $r;
 }
@@ -994,6 +1036,7 @@ sub build_address($) {
     my $lu = shift;
 
     return $lu->get_value("orgworkstreet");
+    return $lu->get_value("orgworkstreetshort");
 
 }
 
@@ -1473,7 +1516,9 @@ sub add_archive_acct {
         " for ", $lu->get_value("uid"), "\n";
 #    $all_users->{(split /\@/, $archive_account)[0]} = 1;
     #$all_users->{$archive_account} = 1;
-    print CHILD_WTR "$archive_account\n";
+    print "writing newly created archive to parent ($$): $archive_account\n"
+	if (exists $opts->{d});
+    print CHILD_WTR "$archive_account:";
 
     my $d3 = new XmlDoc;
     $d3->start('CreateAccountRequest', $MAILNS);
