@@ -76,6 +76,8 @@ my $cal_owner = "calendar-admin\@" . $default_domain;
 my $cal_name  = "Academic Calendar";
 my $cal_path  = "/" . $cal_name;
 
+my $child_status_path="/home/ldap2zimbra";
+
 
 
 
@@ -87,13 +89,13 @@ my $default_ldap_base    = "dc=domain,dc=org";
 my $default_ldap_bind_dn = "cn=Directory Manager";
 my $default_ldap_pass    = "pass";
 # good for testing/debugging:
-#my $default_ldap_filter = 
-#  "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
+my $default_ldap_filter = 
+  "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
 #    "(orghomeorgcd=9500)";
 # my $default_ldap_filter = "(orghomeorgcd=9500)";
 #
 # production:
-my $default_ldap_filter = "(objectclass=orgZimbraPerson)";
+#my $default_ldap_filter = "(objectclass=orgZimbraPerson)";
 
 #### End Site-specific settings
 #############################################################
@@ -269,7 +271,6 @@ for my $lusr (@ldap_entries) {
     my $proc_running = 0;  # indicates a process has been started.
     my $pidcount = 0;      # number of running processes.
     
-
     do {
 	$pidcount = keys %$pids;
 
@@ -279,33 +280,20 @@ for my $lusr (@ldap_entries) {
 	# fork a process if there are less than $parallelism processes
 	# running and there are users left to process.
 
-	if ($pidcount < $parallelism) {
+	if ($pidcount < $parallelism && defined $usrs) {
 	    $sleep_count = 1;
 
 	    $parent_pid = $$;
 
-	    local (*PARENT_RDR);
-	    local (*CHILD_WTR);
-
-	    pipe(PARENT_RDR, CHILD_WTR);  # open a pipe to get output
-					  # from the child.. right now
-					  # we're just interested in
-					  # the archive account that
-					  # was generated so it can be
-					  # added to $all_users and
-					  # not be deleted during the
-					  # delete phase.
-	    CHILD_WTR->autoflush(1);
-
-	    if (!defined *PARENT_RDR || !defined *CHILD_WTR) {
-		print "undefined pipe!?  Retrying..\n";
-		next ;
-	    }
-
 	    my $pid = fork();
 	    
 	    if (defined($pid) && $pid == 0) {
-		close (PARENT_RDR);
+		print "opening for reading: ". $child_status_path . "/" . $parent_pid.".".$$.".childout\n"
+		    if (exists $opts->{d});
+
+		open CHILD_WTR, ">". $child_status_path . "/" . $parent_pid.".".$$.".childout"
+		    || die "can't open for writing: " . 
+		    $child_status_path . "/" . $parent_pid.".".$$.".childout";
 		for my $u (keys %$usrs) {
 		    print "\nworking on ", $u, " ($$) ", `date`
 			if (exists $opts->{d});
@@ -317,17 +305,13 @@ for my $lusr (@ldap_entries) {
 			sync_user($zu_h, $usrs->{$u})
 		    }
 		}
-		print CHILD_WTR "\n";
 		close(CHILD_WTR);
-		$SIG{USR1} = sub { print "process $$ exiting.."; exit 0;};
-		sleep;
-		#exit 0;
+		exit 0;
 	    } elsif (defined($pid) && $pid > 0) {
 		print "proc forked..\n";
 		# $usrs has been passed to the child, clear it.
 		$usrs = undef;
-		close (CHILD_WTR);
-		$pids->{$pid} = *PARENT_RDR;
+		$pids->{$pid} = 1;
 		$proc_running++;
 		$pidcount++;
 	    } else {
@@ -337,62 +321,56 @@ for my $lusr (@ldap_entries) {
 		next;
 	    }
 
-	}# else {
-	if ($pidcount == $parallelism || $users_left == 0) {
-	    my $proc_reclaimed = 0;
+	}
 
-	    for my $p (keys %$pids) {
-		my $fh = $pids->{$p};
-		if (defined $fh) {
-		    my $from_child = <$fh>;
 
-		    # if $fh has nothing in it, $from_child will come
-		    # back !defined..
-		    if (defined $from_child) {
-			chomp $from_child;
-			for (split (/:/, $from_child)) {
-			    print "from child $p: /$_/\n"
-				if (exists $opts->{d});
-			}
-			$all_users->{$from_child} = 1;
-			print "killing $p w/ usr1\n";
-			kill('USR1', $p);
-		    }
+	my $proc_reclaimed = 0;
 
-		}
-		my $ret = waitpid(-1, WNOHANG);
+	for my $p (keys %$pids) {
+	    my $ret = waitpid(-1, WNOHANG);
 
-		if ($ret<0 || $ret>0) {
-		    print "process $ret finished..\n"
-			if (exists $opts->{d});
-		    close $pids->{$ret};
-		    delete $pids->{$ret};
-		    $proc_reclaimed = 1;
-		} 
-	    }
-
-	    # only sleep if one or more process didn't finish..  this
-	    #   allows us to spin off a new process if one's available
-	    #   but keeps us from busy waiting if all the processes
-	    #   are busy.
-	    unless ($proc_reclaimed) {
-		print "sleeping ", $sleep_count, ": no processes reclaimed...\n"
+	    if ($ret<0 || $ret>0) {
+		print "process $ret finished..\n"
 		    if (exists $opts->{d});
-		sleep $sleep_count;
-		$sleep_count += 5;
-
-		# TODO: revisit this.. it really shouldn't happen but
-		# it will cause an infinite loop if it does.
-		# if ($sleep_count > 15) {
-		#    die "sleep_count is too high!  Aborting..";
-		# }
+		open FROM_CHILD, $child_status_path . "/" . $parent_pid.".".$ret.".childout" ||
+		    die "can't open for reading: ".
+		    $child_status_path . "/" . $parent_pid.".".$ret.".childout";
+		while (<FROM_CHILD>) {
+		    chomp;
+		    print "from child: /$_/\n";
+		    $all_users->{$_} = 1;
+		}
+		close (FROM_CHILD);
+		unlink ($child_status_path . "/" . $parent_pid.".".$ret.".childout");
+		delete $pids->{$ret};
+		$proc_reclaimed = 1;
 	    }
 	}
 
-     } until ($proc_running || # a process is running
- 	     (!$proc_running && $pidcount < 1));   # or all processes
+	# only sleep if one or more process didn't finish..  this
+	#   allows us to spin off a new process if one's available
+	#   but keeps us from busy waiting if all the processes
+	#   are busy.
+	unless ($proc_reclaimed) {
+	    print "sleeping ", $sleep_count, ": no processes reclaimed...\n"
+		if (exists $opts->{d});
+	    sleep $sleep_count;
+	    $sleep_count += 5;
+
+	    # TODO: revisit this.. it really shouldn't happen but
+	    # it will cause an infinite loop if it does.
+	    # if ($sleep_count > 15) {
+	    #    die "sleep_count is too high!  Aborting..";
+	    # }
+	}
+
+
+	
+
+    } until ($proc_running && $users_left > 0 || # a process is running and there are still users to process
+ 	     ($users_left == 0 && $pidcount < 1));   # or all processes
 						  # are finished
-						  # running
+						  # running and there are no users to process.
 }
 
 
@@ -751,7 +729,7 @@ sub sync_user($$) {
 	#$all_users->{$archive_acct_name} = 1;
 	print "writing existing archive to parent ($$): $archive_acct_name\n"
 	    if (exists $opts->{d});
-	print CHILD_WTR "$archive_acct_name:";
+	print CHILD_WTR "$archive_acct_name\n";
 
 	# store the archive account name and the ldap user object for
 	# later syncing.
@@ -1518,7 +1496,7 @@ sub add_archive_acct {
     #$all_users->{$archive_account} = 1;
     print "writing newly created archive to parent ($$): $archive_account\n"
 	if (exists $opts->{d});
-    print CHILD_WTR "$archive_account:";
+    print CHILD_WTR "$archive_account\n";
 
     my $d3 = new XmlDoc;
     $d3->start('CreateAccountRequest', $MAILNS);
