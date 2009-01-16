@@ -6,6 +6,7 @@
 #
 # A generalized sendmail-style alias file to Zimbra sync tool
 #
+#
 
 use strict;
 use Getopt::Std;
