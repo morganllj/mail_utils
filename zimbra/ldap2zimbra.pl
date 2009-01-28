@@ -13,6 +13,7 @@
 # TODO:
 #       generalize build_zmailhost()
 #       correct hacks.  Search in script for "hack."
+#       check that writing tmp files failure doesn't cause all users to be deleted
 
 # *****************************
 
@@ -46,11 +47,11 @@ my $max_recurse = 5;
 # I've only tested parallelism <= 4. 
 # I suggest you test larger numbers for $parallelism and
 # $users_per_proc on a development system..
-my $parallelism = 4;
+my $parallelism = 2;
 # number of users to process per fork.  If this number is too low the
 # overhead of perl fork() can lock a Linux system solid.  I suggest
 # keeping this > 50.
-my $users_per_proc = 100;
+my $users_per_proc = 500;
 
 # hostname for zimbra store.  It can be any of your stores.
 # it can be overridden on the command line.
@@ -77,6 +78,7 @@ my $cal_name  = "Academic Calendar";
 my $cal_path  = "/" . $cal_name;
 
 my $child_status_path="/home/ldap2zimbra";
+die "can't write to child status directory: $child_status_path" if (! -w $child_status_path);
 
 
 
@@ -89,13 +91,13 @@ my $default_ldap_base    = "dc=domain,dc=org";
 my $default_ldap_bind_dn = "cn=Directory Manager";
 my $default_ldap_pass    = "pass";
 # good for testing/debugging:
-my $default_ldap_filter = 
-  "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
+#my $default_ldap_filter = 
+#  "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
 #    "(orghomeorgcd=9500)";
 # my $default_ldap_filter = "(orghomeorgcd=9500)";
 #
 # production:
-#my $default_ldap_filter = "(objectclass=orgZimbraPerson)";
+my $default_ldap_filter = "(objectclass=orgZimbraPerson)";
 
 #### End Site-specific settings
 #############################################################
@@ -214,8 +216,7 @@ my $sleep_count=0;
 my $usrs;
 
 my @ldap_entries = $rslt->entries;
-print $#ldap_entries + 1, " entries to process..\n"
-    if (exists $opts->{d});
+print $#ldap_entries + 1, " entries to process..\n";
 
 my $users_left = $#ldap_entries + 1;
 
@@ -266,7 +267,6 @@ for my $lusr (@ldap_entries) {
     # loop unless we have $users_per_proc batched or we're out of users
     next
 	if (keys %$usrs < $users_per_proc && $users_left != 0);
-    print "heading for do..\n";
 
     my $proc_running = 0;  # indicates a process has been started.
     my $pidcount = 0;      # number of running processes.
@@ -282,18 +282,26 @@ for my $lusr (@ldap_entries) {
 
 	if ($pidcount < $parallelism && defined $usrs) {
 	    $sleep_count = 1;
-
 	    $parent_pid = $$;
 
 	    my $pid = fork();
 	    
 	    if (defined($pid) && $pid == 0) {
-		print "opening for reading: ". $child_status_path . "/" . $parent_pid.".".$$.".childout\n"
-		    if (exists $opts->{d});
+                # Child
 
-		open CHILD_WTR, ">". $child_status_path . "/" . $parent_pid.".".$$.".childout"
-		    || die "can't open for writing: " . 
-		    $child_status_path . "/" . $parent_pid.".".$$.".childout";
+                my $child_status_file = $child_status_path . "/" . $parent_pid.".".$$.".childout\n";
+
+# 		print "opening for writing: ". $child_status_path . "/" . $parent_pid.".".$$.".childout\n"
+# 		    if (exists $opts->{d});
+# 		open CHILD_WTR, ">". $child_status_path . "/" . $parent_pid.".".$$.".childout"
+# 		    || die "can't open for writing: " . 
+# 		    $child_status_path . "/" . $parent_pid.".".$$.".childout";
+
+		print "opening for writing: ". $child_status_file
+		    if (exists $opts->{d});
+		open CHILD_WTR, ">". $child_status_file
+		    || die "can't open for writing: " . $child_status_file;
+
 		for my $u (keys %$usrs) {
 		    print "\nworking on ", $u, " ($$) ", `date`
 			if (exists $opts->{d});
@@ -308,7 +316,6 @@ for my $lusr (@ldap_entries) {
 		close(CHILD_WTR);
 		exit 0;
 	    } elsif (defined($pid) && $pid > 0) {
-		print "proc forked..\n";
 		# $usrs has been passed to the child, clear it.
 		$usrs = undef;
 		$pids->{$pid} = 1;
@@ -332,16 +339,28 @@ for my $lusr (@ldap_entries) {
 	    if ($ret<0 || $ret>0) {
 		print "process $ret finished..\n"
 		    if (exists $opts->{d});
-		open FROM_CHILD, $child_status_path . "/" . $parent_pid.".".$ret.".childout" ||
-		    die "can't open for reading: ".
-		    $child_status_path . "/" . $parent_pid.".".$ret.".childout";
+		
+		my $child_status_file = $child_status_path . "/" . $parent_pid.".".$ret.".childout";
+
+                die "can't read child status file: ". $child_status_file
+                    if (! -r $child_status_file);
+
+# 		open FROM_CHILD, $child_status_path . "/" . $parent_pid.".".$ret.".childout" ||
+# 		    die "can't open for reading: ".
+# 		    $child_status_path . "/" . $parent_pid.".".$ret.".childout";
+
+		open FROM_CHILD, $child_status_file ||
+		    die "can't open for reading: " . $child_status_file;
+
 		while (<FROM_CHILD>) {
 		    chomp;
-		    print "from child: /$_/\n";
+		    print "from child: /$_/\n"
+		      if exists ($opts->{d});
 		    $all_users->{$_} = 1;
 		}
 		close (FROM_CHILD);
-		unlink ($child_status_path . "/" . $parent_pid.".".$ret.".childout");
+#		unlink ($child_status_path . "/" . $parent_pid.".".$ret.".childout");
+		unlink $child_status_file;
 		delete $pids->{$ret};
 		$proc_reclaimed = 1;
 	    }
@@ -405,6 +424,7 @@ if (exists $opts->{a}) {
 ### zimbra accounts no longer in LDAP.
 
 print "\nfinished at ", `date`;
+print "\n";
 $rslt = $ldap->unbind;
 
 
@@ -434,7 +454,8 @@ sub add_user($) {
 	my $v = build_target_z_value($lu, $zattr, $z2l);
 
 	if (!defined($v)) {
-	    print "unable to build value for $zattr, skipping..\n";
+	    print "unable to build value for $zattr, skipping..\n"
+	      if (exists $opts->{d});
 	    next;
 	}
 
@@ -782,7 +803,8 @@ sub find_and_apply_user_diffs {
 	    $l_val_str = build_target_z_value($lu, $zattr, $z2l);
 
 	    if (!defined($l_val_str)) {
-		print "unable to build value for $zattr, skipping..\n";
+		print "unable to build value for $zattr, skipping..\n"
+		  if (exists $opts->{d});
 		next;
 	    }
 	}
@@ -917,7 +939,7 @@ sub get_z2l($) {
     # -----------------------------------------------
     # street       ULC-SUPPLY-ST-ADD ULC-SUP-NAME-2  
     #                              4th Floor - Suite 404 440 N. Broad Street
-    #                                            orgWorkStreetShort (*proposed*)
+    #                                            orgWorkStreetShort
     # st           ULC-STATE-CODE  PA            orgWorkState
     # l            ULC-CITY        Philadelphia  orgWorkCity
     # postalCode   ULC-SUPPLY-ZIP  19130         orgWorkZip
@@ -980,7 +1002,7 @@ sub build_last_first($) {
 	$r .= $f;
     }
 
-    return $r;
+    return fix_case($r);
 }
 
 
@@ -1013,9 +1035,8 @@ sub build_phone_fax($) {
 sub build_address($) {
     my $lu = shift;
 
-    return $lu->get_value("orgworkstreet");
-    return $lu->get_value("orgworkstreetshort");
-
+    #return $lu->get_value("orgworkstreetshort");
+    return fix_case($lu->get_value("orgworkstreetshort"));
 }
 
 
@@ -1115,6 +1136,11 @@ sub fix_case($) {
                                           #   (char class) in regex
     # upcase these when they're standing alone
     my @uc_clusters = qw/hs hr ms es avts pd/;
+
+    # state abbreviations
+    # http://www.usps.com/ncsc/lookups/usps_abbreviations.html#states
+    push @uc_clusters, qw/AL AK AS  AZ AR CA CO CT DE DC FM FL GA GU HI ID IL IN IA KS KY LA ME MH MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND MP OH OK OR PW PA PR RI SC SD TN TX UT VT VI VA WA WV WI WY AE AA AE AE AE AP/;
+
 
     # upcase char after if a word starts with this
     my @uc_after_if_first = qw/mc/;
@@ -1242,8 +1268,9 @@ sub delete_not_in_ldap() {
 	# break down the search by alpha/numeric if reason is 
 	#    account.TOO_MANY_SEARCH_RESULTS
 	if (defined $rsn && $rsn eq "account.TOO_MANY_SEARCH_RESULTS") {
-	    print "\tfault due to $rsn\n";
-	    print "\trecursing deeper to return fewer results.\n";
+	    print "\tfault due to $rsn\n".
+	      "\trecursing deeper to return fewer results.\n"
+		if (exists $opts->{d});
 	    
 	    delete_in_range(undef, "a", "z");
 	    return;
