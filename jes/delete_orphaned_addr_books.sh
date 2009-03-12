@@ -5,7 +5,7 @@
 # 3/11/09
 # $Id$
 
-pass='Dpw34Sf.'
+pass='pass'
 binddn="cn=Directory Manager"
 base="o=msu_ag"
 addr_base="o=piserverdb"
