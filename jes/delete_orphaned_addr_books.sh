@@ -5,8 +5,8 @@
 # 3/11/09
 # $Id$
 
-pass='pass'
-binddn="cn=Directory Manager"
+pass='pass';
+binddn="cn=Directory\\ Manager"
 base="o=msu_ag"
 addr_base="o=piserverdb"
 
@@ -21,14 +21,14 @@ for user in `ldapsearch -D "$binddn" -w $pass -Lb $addr_base \
 
     # if a user isn't found
     if [ -z "$rslt" ]; then
-        echo "$user"
 
         # get and delete any associated entries
         for dn in `ldapsearch -r -D "$binddn" -w $pass -b \
             piPStoreOwner=$user,o=ext.domain.org,o=PiServerDb objectclass=\* \
             dn|tail -r`; do
 
-            echo ldapdelete -v -D "$binddn" -w 'pas' $dn
+            echo ldapdelete -v -D "$binddn" -w pass $dn
+            ldapdelete -v -D "$binddn" -w $pass $dn
         done
     fi
 done
