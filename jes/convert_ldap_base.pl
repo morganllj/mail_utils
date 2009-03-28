@@ -1,8 +1,12 @@
 #!/usr/bin/perl -w
 #
-# 080904: moved into subversion at ~/Docs/utils as convert_ldap_base.pl
+# Morgan Jones (morgan@morganjones.org)
+# Description: ...
 
 $/="";
+
+# objectclass: iplanet-am-managed-group
+# objectclass: iplanet-am-managed-static-group
 
 
 
@@ -12,14 +16,14 @@ betty@cett.dc=domain,dc=org
 connie@cett.dc=domain,dc=org
 peter@cett.dc=domain,dc=org
 sean@cett.dc=domain,dc=org
-williams@davfm.dc=domain,dc=org
-vwatson@davfm.dc=domain,dc=org
-ray@davfm.dc=domain,dc=org
-mixon@davfm.dc=domain,dc=org
-vpdavfm-bus@davfm.dc=domain,dc=org
-lsinger@davfm.dc=domain,dc=org
-baker@davfm.dc=domain,dc=org
-jenkins@davfm.dc=domain,dc=org
+williams@dafvm.dc=domain,dc=org
+vwatson@dafvm.dc=domain,dc=org
+ray@dafvm.dc=domain,dc=org
+mixon@dafvm.dc=domain,dc=org
+vpdafvm-bus@dafvm.dc=domain,dc=org
+lsinger@dafvm.dc=domain,dc=org
+baker@dafvm.dc=domain,dc=org
+jenkins@dafvm.dc=domain,dc=org
 ljb@srdc.domain.org
 rachelw@srdc.domain.org
 alanb@srdc.domain.org
@@ -36,14 +40,14 @@ shannont@srdc.domain.org
 @alt_groups_domains=qw/
 atoms@cett.dc=domain,dc=org
 info@cett.dc=domain,dc=org
-dha@davfm.dc=domain,dc=org
-fmgroup@davfm.dc=domain,dc=org
-fm2005@davfm.dc=domain,dc=org
-fm2006@davfm.dc=domain,dc=org
-fm2007@davfm.dc=domain,dc=org
-fm2008@davfm.dc=domain,dc=org
-fmdeptheads@davfm.dc=domain,dc=org
-fmbackupgroup@davfm.dc=domain,dc=org
+dha@dafvm.dc=domain,dc=org
+fmgroup@dafvm.dc=domain,dc=org
+fm2005@dafvm.dc=domain,dc=org
+fm2006@dafvm.dc=domain,dc=org
+fm2007@dafvm.dc=domain,dc=org
+fm2008@dafvm.dc=domain,dc=org
+fmdeptheads@dafvm.dc=domain,dc=org
+fmbackupgroup@dafvm.dc=domain,dc=org
 publications@srdc.domain.org
 /;
 
@@ -91,6 +95,9 @@ while(<>) {
 
 	}
     } else {
+
+	s/mailhost:\s*[^\n]+\n/mailhost: atlas.ext.domain.org\n/;
+
 	if (my ($u) = /dn:\s*uid=([^\,]+)\,/) {
 	    # users
 	    #?
@@ -106,6 +113,8 @@ while(<>) {
 		    print STDERR "changed domain, $lhs $d\n"
 		}
 	    }
+
+
 	} elsif (my ($g) = /dn:\s*cn=([^\,]+)\,/) {
 	    # groups (aliases)
 
