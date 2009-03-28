@@ -3,7 +3,8 @@
 # Author: Morgan Jones (morgan@morganjones.org)
 # Id:     $Id$
 #
-# Convert a Java Messaging Server 6.2 PAB to CSV
+# Convert a Java Messaging Server 6.2 PAB to a CSV per user.
+#   This was used to migrate users into Exchange 2007
 #
 # cd working/dir/path
 #  ~/Docs/utils/trunk/jes/pab2csv.pl -u dc_ou_dc_edu_070522.ldif -p pab_no_mime.ldif -o contacts -a '"" givenname "" sn "" "" "" "" street "" "" l st postalcode co "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" facsimileTelephoneNumber telephoneNumber "" "" "" "" "" homephone "" "" mobile "" "" pager "" "" "" "" "" "" "" dateofbirth "" "" "" "" mail "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" "" labeleduri'|more
@@ -36,9 +37,6 @@ $opts->{d} && print "attr_list: /$user_attr_list/\n";
 
 #my @pab_attrs_to_collect = split(/\s{1}/, $user_attr_list);
 my @pab_attrs_to_collect = split(/\,/, $user_attr_list);
-
-
-#open (OUT, ">$csv_out") || die "can't open $csv_out for writing";
 
 # populate hash mapping paburi to uid
 print "*** building paburi to uid mapping table...\n";
@@ -140,50 +138,48 @@ sub parse_pab_entry($$) {
     $e =~ s/\n\s+//g;
     $e .= "\n";  # add a cr to keep the lines consistent
 
-    #$opts->{d} && print "\n\nentry: /$e/\n";
-
     my $dn;
     my @r;
     # ignore entries that don't contain a dn or mail attribute and
     # entries that include 'un=AddressBook' in the dn.
-     if ($e =~ /dn:\s*([^\n]+)\n/i && $e !~ /dn:\s*un=addressbook/i && 
-	 $e =~ /\nmail:[^\@]*\@[^\n]*\n/) {
+
+#    print "e: /$e/\n";
+
+    if ($e =~ /\nmail:[^\@]*\@[^\n]*\n/ && 
+	$e !~ /dn:\s*un=addressbook/i &&
+	$e =~ /dn:\s*([^\n]+)\n/i) { 
+
         $dn = $1; 
+	$opts->{d} && print "dn: /$dn/\n";
     }	else {
         return @r;    
     }
 
-    # strip off the first item in the dn:
-    #  dn:  un=MorganJones4df9d55,ou=uniqueIdentifier=9120,ou=people,o=ou.edu,dc=ou,dc=edu,o=pab
+    # strip off the rdn:
+    #  dn:  un=MorganJones4df9d55,ou=uniqueIdentifier=9120,
+    #          ou=people,o=ou.edu,dc=ou,dc=edu,o=pab
     #  becomes ou=uniqueIdentifier=9120,ou=people,o=ou.edu,dc=ou,dc=edu,o=pab
-    #
     $e =~ /dn:\s*[^\,]+,\s*([^\n]+)\n/i;
     my $pt = $1;
-    if ($e =~ /128837/) {
-	print "pt: /$pt/\n";
-	if (!exists $p2u->{lc $pt}) {
-	    print "not in p2u..\n";
-	}
-    }
-    #$pt = (split /\,/, $dn)[0];
-    #$pt =~ s/dn:\s*//i;
 
     if (!defined $pt || (defined $pt && !exists $p2u->{lc $pt})) {
-        #$opts->{d} && print "orphaned pab tree or container: $dn\n";
+        $opts->{d} && print "orphaned pab tree or container: $dn\n";
     } else { 
-        my $u =  $p2u->{lc $pt};
+        my $u = $p2u->{lc $pt};
 	
         push @r, $u;
 
-        # pull the attributes out of the entry:
+        # pull the requested attributes out of the entry:
         for my $a (@pab_attrs_to_collect) {
             if ($a !~ /^\s*$/ && $e =~ /\n$a:\s*([^\n:]+)\n/i) {  
                        #':' added to keep blank entries from collecting the 
 		       #     next line.  ie:
+		       #
                        # homePhone:
                        # modifiersName: cn=Directory Manager
-		       #  would return 'modifiersName: cn=Directory Manager for 
-	               #     phone.
+		       #
+		       #     would return 'modifiersName: cn=Directory Manager 
+                       #     for phone.
                 my $v = $1;
 
 
@@ -211,6 +207,8 @@ sub get_pab_uris($) {
     my $p2u_h;
     open (USR, "$file") || die "can't open $file\n";
     while (<USR>) {
+	# un-wrap lines in the ldif
+	s/\n\s+//g;
         my ($dn)     = /dn:\s*([^\n]+)/i;
         my ($uid)    = /uid:\s*([^\n]+)/i;
         my ($paburi) = /paburi:\s*([^\n]+)/i;
