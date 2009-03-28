@@ -4,7 +4,7 @@
 use strict;
 
 my @domain_from =    "ext.domain.org";
-my @hosted_domains = qw/srdc.domain.org cett.dc=domain,dc=org create4ms.dc=domain,dc=org davfm.dc=domain,dc=org/;
+my @hosted_domains = qw/srdc.domain.org cett.dc=domain,dc=org dafvm.dc=domain,dc=org/;
 
 for my $d (@hosted_domains) {
     print "\n$d:\n";
