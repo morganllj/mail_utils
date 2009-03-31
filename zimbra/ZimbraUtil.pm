@@ -11,23 +11,46 @@ use Soap;
 use Data::Dumper;
 use Net::LDAP;
 
-our $url;
-our $ACCTNS = "urn:zimbraAdmin";
-our $MAILNS = "urn:zimbraAdmin";
-our $SOAP;
-our $sessionId;
-our $zimbra_pass;
+
+
+# Defaults
 # max delete recurse depth -- how deep should we go before giving up
 # searching for users to delete:
 # 5 == aaaaa*
-our $max_recurse = 5;
-our $context;
+my $max_recurse = 5;
+my $debug=1;
+
+# ldap defaults
+my %l_params = (
+    l_host => "ldap0.domain.org",
+    l_binddn => "cn=directory manager",
+    l_bindpass => "pass",
+    l_base => "dc=domain,dc=org",
+);
+
+# Zimbra defaults
+my %z_params = (
+    z_server => "dmail01.domain.org",
+    z_pass => "pass",
+    z_domain => "dev.domain.org",  # mail domain
+    z_archive_mailhost => "dmail02.domain.org",
+    z_archive_suffix => "archive"
+);
+my $zimbra_limit_filter = "(objectclass=orgzimbraperson)";
+my $ACCTNS = "urn:zimbraAdmin";
+my $MAILNS = "urn:zimbraAdmin";
+my $SOAP;
+my $sessionId;
+my $context;
+
+$z_params{z_url} = "https://" . $z_params{z_server} . ":7071/service/admin/soap/";
+$z_params{z_archive_domain} = $z_params{z_domain} . "." . "archive";
 
 
-
+# Top level public functions
 #####
 sub return_all_accounts {
-    return operate_on_user_list(func=>\&parse_and_return_list, 
+    return operate_on_user_list(func=>\&ooul_func_return_list, 
                                 filter=>"(|(uid=j*)(uid=k*))");
 }
 
@@ -40,7 +63,8 @@ sub rename_all_archives {
 #    return operate_on_user_list(func=>\&rename_archives, 
 #                                filter=>"(uid=a*)");
 
-    return operate_on_user_list(func=>\&rename_archives);
+    return operate_on_user_list(func=>\&ooul_func_rename_archives,
+                                filter=>"(uid=a*)");
 
 }
 
@@ -48,9 +72,40 @@ sub rename_all_archives {
 
 
 
+# Package utility function(s)
+#####
 sub new {
     my $class = shift;
-    ($url, $zimbra_pass) = @_;
+    my %args = @_;
+
+    for my $k (keys %args) {
+        if (exists $z_params{$k}) {
+            $z_params{$k} = $args{$k};
+            next; 
+        } elsif ($k =~ /^z_/) {
+            warn "no default found in ZimbraUtil for named arg $k.  It will be added to \%z_params";
+            $z_params{$k} = $args{$k}; 
+            next; 
+        }
+                
+        if (exists $l_params{$k}) {
+            $l_params{$k} = $args{$k};
+            next;
+        } elsif ($k =~ /^l_/) {
+            warn "no default found in ZimbraUtil for named arg $k.  It will be added to \%z_params";
+            $l_params{$k} = $args{$k};
+            next;
+        }
+       
+        if ($k =~ /^g_/) {
+            $debug = $args{$k}
+                if ($k == "g_debug");
+            next;
+        }
+        
+        warn "can't find  matching key for ZimbraUtil named argument $k.  it will be ignored";
+    }
+    
 
     my $self = {};
 
@@ -64,77 +119,15 @@ sub new {
 }
 
 
-# check for and correct expired authentication during invoke.
-#  The idea is to catch an expired auth token on the fly so as to not 
-#  interrupt the running script.
-sub check_context_invoke {
-    my ($d, $context_ref) = @_;
-
-    my $debug=1;
-    
-    my $r = $SOAP->invoke($url, $d->root(), $$context_ref);
-
-    if ($r->name eq "Fault") {
-	my $rsn = get_fault_reason($r);
-	if (defined $rsn && $rsn =~ /AUTH_EXPIRED/) {
-	    # authentication timed out, re-authenticate and re-try the invoke
-	    print "\tfault due to $rsn at ", `date`;
-	    print "\tre-authenticating..\n";
-	    $$context_ref = get_zimbra_context();
-	    $r = $SOAP->invoke($url, $d->root(), $$context_ref);
-
-# 	    print "killing $parent_pid to cause global ".
-# 		"\$context to be reloaded..\n"
-#                 if (defined $debug);
-# 	    kill('HUP', $parent_pid);
-	    if ($r->name eq "Fault") {
-		$rsn = get_fault_reason($r);
-		if (defined $rsn && $rsn =~ /AUTH_EXPIRED/) {
-		    print "got $rsn *again* ... ".
-			"this shouldn't happen, exiting.\n";
-		    print Dumper($r);
-		    exit;
-		} else {
-		    # we got a fault of some other sort, return to the
-		    # caller to handle the fault
-		    return $r;
-		}
-	    }
-	}
-    }
-    return $r;
-}
 
 
 
 
 
 
-
-######
-sub get_context {
-
-    # authenticate to Zimbra admin url
-    my $d = new XmlDoc;
-    $d->start('AuthRequest', $ACCTNS);
-    $d->add('name', undef, undef, "admin");
-    $d->add('password', undef, undef, $zimbra_pass);
-    $d->end();
-
-    # get back an authResponse, authToken, sessionId & context.
-    my $authResponse = $SOAP->invoke($url, $d->root());
-
-    my $authToken = $authResponse->find_child('authToken')->content;
-    # this needs to global to allow delegated auth to work..
-    $sessionId = $authResponse->find_child('sessionId')->content;
-
-    return $SOAP->zimbraContext($authToken, $sessionId);
-}
-
-
-
+# funcs to pass to operate_on_user_list
 #######
-sub parse_and_return_list($) {
+sub ooul_func_return_list($) {
     my $r = shift;
 
     my @l;
@@ -158,32 +151,28 @@ sub parse_and_return_list($) {
 
 
 #######
-sub rename_archives($) {
+sub ooul_func_rename_archives($) {
     my $r = shift;
 
-#    print "r passed in: ". Dumper ($r);
-
-    my $ldap_host = "ldap0.domain.org";
-    my $binddn = "cn=directory\ manager";
-    my $bindpass = "pass";
-    my $ldap_base = "dc=domain,dc=org";
-
     # bind to ldap
-    my $ldap = Net::LDAP->new($ldap_host);
-    my $rslt = $ldap->bind($binddn, password => $bindpass);
-    $rslt->code && die "unable to bind as ", $binddn, ": ", $rslt->error;
-    
+#    my $ldap = Net::LDAP->new($ldap_host);
+#    my $rslt = $ldap->bind($binddn, password => $bindpass);
+#    $rslt->code && die "unable to bind as ", $binddn, ": ", $rslt->error;
 
+   my $ldap = Net::LDAP->new($l_params{l_host});
+    my $rslt = $ldap->bind($l_params{l_binddn}, password => $l_params{l_bindpass});
+    $rslt->code && die "unable to bind as ", $l_params{l_binddn}, ": ", $rslt->error;
 
     my @l;
 
+    # cycle through the zimbra result object.
     for my $child (@{$r->children()}) {
-        my ($mail, $z_id, $archive, $amavis_to, $uid);
+        my ($mail, $zimbra_id, $archive, $amavis_to, $uid);
 
         for my $attr (@{$child->children}) {
             $mail = $attr->content()
                 if (lc((values %{$attr->attrs()})[0]) eq "mail");
-            $z_id = $attr->content()
+            $zimbra_id = $attr->content()
                 if (lc((values %{$attr->attrs()})[0]) eq "zimbraid");
             $archive = $attr->content()
                 if (lc((values %{$attr->attrs()})[0]) eq "zimbraarchiveaccount");
@@ -194,19 +183,10 @@ sub rename_archives($) {
         }
 
         # skip to next if we're on an archive account
-        
-        my $archive_suffix = "archive";
-        next unless (defined $mail && $mail !~ /$archive_suffix$/);
+#        next unless (defined $mail && $mail !~ /$archive_suffix$/);
+        next unless (defined $mail && $mail !~ /$z_params{z_archive_suffix}$/);
 
-        #print "working on mail: $mail\n";
-
-
-
-
-
-        my $zimbra_limit_filter = "(objectclass=orgzimbraperson)";
-
-
+        # find corresponding user in ldap
         my $fil;
         $fil = "(&" . $zimbra_limit_filter
             if (defined $zimbra_limit_filter);
@@ -214,10 +194,9 @@ sub rename_archives($) {
         $fil .= "(uid=$uid)";
         
         $fil .= ")";
-
         
-#        print "searching $fil..\n";
-        $rslt = $ldap->search(base => "$ldap_base", filter => $fil);
+#        $rslt = $ldap->search(base => "$ldap_base", filter => $fil);
+        $rslt = $ldap->search(base => $l_params{l_base}, filter => $fil);
         $rslt->code && die "problem with search $fil: ".$rslt->error;  
 
         my $lusr = ($rslt->entries)[0];
@@ -226,8 +205,8 @@ sub rename_archives($) {
             print "$mail is not in ldap!?\n";
             next;
         }
-                
-
+        
+        # get int employee id from ldap
         my $int_empl_id = $lusr->get_value("orgghrsintemplidno");
 
         if ($amavis_to ne $archive) {
@@ -241,12 +220,59 @@ sub rename_archives($) {
         my $archive_usr_part = (split /@/, $archive)[0];
         if (lc $int_empl_id !~ lc $archive_usr_part) {
             print "archive differs for $uid: $int_empl_id vs $archive\n";
-            # TODO: make sure archive exists.  Create it?  move it.
+            # TODO: make sure archive exists.  Create it?  move it?
 
+#            my $archive_domain = "dev.domain.archive";
 
             # rename archive account
+            # get zimbra id of archive for rename
 
-            # if that's successful change the 
+#             my $d2 = new XmlDoc();
+#             $d2->start('GetAccountRequest', $MAILNS);
+#             $d2->add('account', $MAILNS, { "by" => "name" }, $archive);
+#             $d2->end();
+            
+#             $r2 = check_context_invoke($d2, \$context);
+#             if ($r2->name eq "Fault") {
+#                 my $rsn = get_fault_reason($r2);
+#                 print "problem getting id for archive $archive.. aborting, moving on to next user\n";
+#                 print Dumper($r2);
+#                 next;
+#             }
+
+#             my $mc = $r2->find_child('account');
+
+
+
+            # get zimbra id of existing archive from zimbra
+            my $archive_zimbra_id = get_archive_account_id($archive);
+
+            # build the name of the new archive
+            my $new_archive = $int_empl_id . "@" . $z_params{z_archive_domain};
+
+            print "renaming $archive_zimbra_id ($archive) to $new_archive..\n";
+
+            # rename archive account
+#             my $d = new XmlDoc();
+#             $d->start('RenameAccountRequest', $MAILNS);
+#             $d->add('id', $MAILNS, undef, $archive_zimbra_id);
+#             $d->add('newName', $MAILNS, undef, $new_archive);
+
+#             my $r = check_context_invoke($d, \$context);
+#             if ($r->name eq "Fault") {
+#                 my $rsn = get_fault_reason($r);
+
+#                 print "problem renaming user: $rsn\n";
+#                 print Dumper($r);
+#                 next;
+#             }
+                    
+#             # if that's successful change the attributes in the user account
+#             my $d2 = new XmlDoc();
+#             $d2->start('ModifyAccountRequest', $MAILNS);
+#             $d2->add('id', $MAILNS, undef, $zimbra_id);
+#             $d2->add('a', $MAILNS, {"n" => "zimbraarchiveaccount"}, $int_emp...);
+#                      "amavisarchivequarantineto")
 
         }
     }
@@ -254,10 +280,15 @@ sub rename_archives($) {
 
 
 
+
+
+
+
+
+# Utility functions
 #####
 sub operate_on_user_list() {
     my %args = @_;
-    my $debug=1;
 
     exists $args{func} || return undef;
     
@@ -277,8 +308,7 @@ sub operate_on_user_list() {
 #                 'types'  => "accounts"}
 #            ); 
 
-     $d->start('SearchDirectoryRequest', $MAILNS, {'types'  => "accounts"}
-            ); 
+     $d->start('SearchDirectoryRequest', $MAILNS, {'types'  => "accounts"}); 
 
 
     if (defined $search_fil) {
@@ -331,11 +361,8 @@ sub operate_on_user_list() {
 
 
 
-
-
-
-
 #######
+# called from within operate_on_user_list if an account.TOO_MANY_SEARCH_RESULTS Fault is thrown
 # a, b, c, d, .. z
 # a, aa, ab, ac .. az, ba, bb .. zz
 # a, aa, aaa, aab, aac ... zzz
@@ -343,8 +370,6 @@ sub operate_on_user_list() {
 sub operate_on_range {
     #my ($prfx, $beg, $end) = @_;
     my ($prfx, $beg, $end, $func, $search_fil) = @_;
-
-    my $debug=1;
 
 #     print "deleting ";
 #     print "${beg}..${end} ";
@@ -436,6 +461,106 @@ BEGIN {
     }
 }
 
+
+######
+sub get_context {
+
+    # authenticate to Zimbra admin url
+    my $d = new XmlDoc;
+    $d->start('AuthRequest', $ACCTNS);
+    $d->add('name', undef, undef, "admin");
+    $d->add('password', undef, undef, $z_params{z_pass});
+    $d->end();
+
+    # get back an authResponse, authToken, sessionId & context.
+    my $authResponse = $SOAP->invoke($z_params{z_url}, $d->root());
+
+    my $authToken = $authResponse->find_child('authToken')->content;
+    # this needs to global to allow delegated auth to work..
+    $sessionId = $authResponse->find_child('sessionId')->content;
+
+    return $SOAP->zimbraContext($authToken, $sessionId);
+}
+
+
+
+######
+# for compatibility
+sub get_archive_account_id($) {
+    return get_account_id(@_);
+}
+
+
+######
+sub get_account_id($) {
+    my $a = shift;
+
+    my $d2 = new XmlDoc;
+    $d2->start('GetAccountRequest', $MAILNS); 
+    $d2->add('account', $MAILNS, { "by" => "name" }, $a);
+    $d2->end();
+    
+    my $r2 = check_context_invoke($d2, \$context);
+
+    if ($r2->name eq "Fault") {
+	my $rsn = get_fault_reason($r2);
+	if ($rsn ne "account.NO_SUCH_ACCOUNT") {
+	    print "problem searching out account $a\n";
+	    print Dumper($r2);
+	    return;
+	}
+    }
+
+    my $mc = $r2->find_child('account');
+
+    return $mc->attrs->{id}
+        if (defined $mc);
+	
+    return undef;
+}
+
+
+######
+# check for and correct expired authentication during invoke.
+#  The idea is to catch an expired auth token on the fly so as to not 
+#  interrupt the running script.
+sub check_context_invoke {
+    my ($d, $context_ref) = @_;
+
+    my $r = $SOAP->invoke($z_params{z_url}, $d->root(), $$context_ref);
+
+    if ($r->name eq "Fault") {
+	my $rsn = get_fault_reason($r);
+	if (defined $rsn && $rsn =~ /AUTH_EXPIRED/) {
+	    # authentication timed out, re-authenticate and re-try the invoke
+	    print "\tfault due to $rsn at ", `date`;
+	    print "\tre-authenticating..\n";
+	    $$context_ref = get_zimbra_context();
+	    $r = $SOAP->invoke($z_params{z_url}, $d->root(), $$context_ref);
+
+# 	    print "killing $parent_pid to cause global ".
+# 		"\$context to be reloaded..\n"
+#                 if (defined $debug);
+# 	    kill('HUP', $parent_pid);
+	    if ($r->name eq "Fault") {
+		$rsn = get_fault_reason($r);
+		if (defined $rsn && $rsn =~ /AUTH_EXPIRED/) {
+		    print "got $rsn *again* ... ".
+			"this shouldn't happen, exiting.\n";
+		    print Dumper($r);
+		    exit;
+		} else {
+		    # we got a fault of some other sort, return to the
+		    # caller to handle the fault
+		    return $r;
+		}
+	    }
+	}
+    }
+    return $r;
+}
+
+
 ######
 sub get_fault_reason {
     my $r = shift;
@@ -453,6 +578,9 @@ sub get_fault_reason {
 
     return "<no reason found..>";
 }
+
+
+
 
 
 1;

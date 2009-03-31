@@ -15,7 +15,7 @@
 # use IO::Handle;
 # these accounts will never be added, removed or modified
 #   It's a perl regex
-my $exclude_group_rdn = "cn=orgexcludes";  # assumed to be in $ldap_base
+#my $exclude_group_rdn = "cn=orgexcludes";  # assumed to be in $ldap_base
 
 # run case fixing algorithm (fix_case()) on these attrs.
 #   Basically upcase after spaces and certain chars
@@ -42,15 +42,15 @@ my $exclude_group_rdn = "cn=orgexcludes";  # assumed to be in $ldap_base
 
 # hostname for zimbra store.  It can be any of your stores.
 # it can be overridden on the command line.
-my $default_zimbra_svr = "dmail01.domain.org";
+# my $default_zimbra_svr = "dmail01.domain.org";
 # zimbra admin password
-my $default_zimbra_pass  = 'pass';
+# my $default_zimbra_pass  = 'pass';
 
 # default domain, used every time a user is created and in some cases
 # modified.  Can be overridden on the command line.
-my $default_domain       = "dev.domain.org";
+# my $default_domain       = "dev.domain.org";
 
-my $archive_mailhost = "dmail02.domain.org";
+# my $archive_mailhost = "dmail02.domain.org";
 
 # TODO: look up cos by name instead of requiring the user enter the cos id.
 # prod:
@@ -103,33 +103,33 @@ use ZimbraUtil;
 $|=1;
 
 sub print_usage();
-# sub add_user($);
-# sub sync_user($$);
-# sub get_z_user($);
-# sub fix_case($);
-# sub build_target_z_value($$$);
-# sub delete_not_in_ldap();
-# sub delete_in_range($$$);
-# sub parse_and_del($);
-# sub renew_context();
-# sub in_exclude_list($);
-# sub get_exclude_list();
-# sub build_archive_account($);
+
+my %opts;
+getopts('hl:D:w:b:em:ndz:s:p', \%opts);
+
+my %arg_h;
+
+# TODO handle unimplemented args:
+for my $k (keys %opts) {
+    if    ($k eq "h")   { print_usage() }
+    elsif ($k eq "l")   { $arg_h{l_host}     = $opts{l}; }
+    elsif ($k eq "D")   { $arg_h{l_binddn}   = $opts{D}; } 
+    elsif ($k eq "w")   { $arg_h{l_bindpass} = $opts{w}; }
+    elsif ($k eq "b")   { $arg_h{l_base}     = $opts{b}; }
+    elsif ($k eq "z")   { $arg_h{z_server}   = $opts{z}; }
+    elsif ($k eq "m")   { $arg_h{z_domain}   = $opts{m}; }
+    elsif ($k eq "p")   { $arg_h{z_pass}     = $opts{p}; }
+    elsif ($k eq "e")   { print "extensive (-e) option not yet implemented\n"; }
+    elsif ($k eq "n")   { print "print-only (-n) option not yet implemented\n"; }
+    elsif ($k eq "d")   { $arg_h{g_debug}    = 1; }
+    elsif ($k eq "s")   { # $arg_h{l_subset)..
+                          print "subset (-s) option not yet implemented\n"; }
+    elsif ($k eq "h")   { print_usage(); }
+    else                { print "unimplemented option: -${k}:"; 
+                          print_usage(); }
+}
 
 
-my $opts;
-# getopts('hl:D:w:b:em:ndz:s:p:a', \%$opts);
-getopts('hs:', \%$opts);
-
-$opts->{h}                     && print_usage();
-# my $ldap_host = $opts->{l}     || $default_ldap_host;
-# my $ldap_base = $opts->{b}     || $default_ldap_base;
-# my $binddn =    $opts->{D}     || $default_ldap_bind_dn;
-# my $bindpass =  $opts->{w}     || $default_ldap_pass;
-my $zimbra_svr = $opts->{z}    || $default_zimbra_svr;
-# my $zimbra_domain = $opts->{m} || $default_domain;
-my $zimbra_pass = $opts->{p}   || $default_zimbra_pass;
-my $subset_str = $opts->{s};
 
 # my $multi_domain_mode = $opts->{u} || "0";  # the default is to treat
 					    # all users as in the
@@ -145,7 +145,7 @@ my $subset_str = $opts->{s};
 
 # url for zimbra store.  It can be any of your stores
 # my $url = "https://dmail01.domain.org:7071/service/admin/soap/";
-my $url = "https://" . $zimbra_svr . ":7071/service/admin/soap/";
+#my $url = "https://" . $zimbra_svr . ":7071/service/admin/soap/";
 
 # my $ACCTNS = "urn:zimbraAdmin";
 # my $MAILNS = "urn:zimbraAdmin";
@@ -154,13 +154,13 @@ my $url = "https://" . $zimbra_svr . ":7071/service/admin/soap/";
 
 # hash ref to store a list of users added/modified to extra users can
 # be deleted from zimbra.
-my $all_users;
-my $subset;
+#my $all_users;
+# my $subset;
 # has ref to store archive accounts that need to be sync'ed.
-my $archive_accts;
+# my $archive_accts;
 
-print "-n used, no changes will be made.\n"
-    if (exists $opts->{n});
+# print "-n used, no changes will be made.\n"
+#     if (exists $opts->{n});
 
 
 # print "-a used, archive accounts will be synced--".
@@ -181,16 +181,53 @@ print "\nstarting at ", `date`;
 ### search out every account in ldap.
 
 
-my $zu = new ZimbraUtil($url, $zimbra_pass);
+
+my $zu = new ZimbraUtil(%arg_h);
+
 
 #my @aa = $zu->return_all_accounts();
 my @aa = $zu->rename_all_archives();
+
+print "\nfinished at ", `date`;
 
 
 # print "accounts returned:\n";
 # for (@aa) {
 #     print "$_\n";
 # }
+
+
+######
+sub print_usage() {
+    print "\n";
+    print "usage: $0 [-n] [-d] [-e] [-h] -l [<ldap host>] -b [<basedn>]\n".
+	"\t-D [<binddn>] -w [<bindpass>] -m [<zimbra domain>] -z [<zimbra host>]\n".
+	"\t[-s \"user1,user2, .. usern\"] -p <zimbra admin user pass>\n";
+    print "\n";
+    print "\toptions in [] are optional, but all can have defaults\n".
+	"\t(see script to set defaults)\n";
+    print "\t-n print, don't make changes\n";
+    print "\t-d debug\n";
+    print "\t-e exhaustive search.  Search out all Zimbra users and delete\n".
+	"\t\tany that are not in your enterprise ldap.  Steps have been \n".
+	"\t\tto make this scale arbitrarily high.  It's been tested on \n".
+	"\t\ttens of thousands successfully.\n";
+    print "\t-h this usage\n";
+    print "\t-D <binddn> Must have unlimited sizelimit, lookthroughlimit\n".
+	"\t\tnearly Directory Manager privilege to view users.\n";
+    print "\t-s \"user1, user2, .. usern\" provision a subset, useful for\n".
+	"\t\tbuilding dev environments out of your production ldap or\n".
+	"\t\tfixing a few users without going through all users\n".
+	"\t\tIf you specify -e as well all other users will be deleted\n";
+    print "\n";
+    print "example: ".
+	"$0 -l ldap.morganjones.org -b dc=morganjones,dc=org \\\n".
+	"\t\t-D cn=directory\ manager -w pass -z zimbra.morganjones.org \\\n".
+        "\t\t-m morganjones.org\n";
+    print "\n";
+
+    exit 0;
+}
 
 __END__
 
