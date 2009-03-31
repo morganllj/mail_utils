@@ -89,7 +89,7 @@ die "can't write to child status directory: $child_status_path" if (! -w $child_
 my $default_ldap_host    = "ldap0.domain.org";
 my $default_ldap_base    = "dc=domain,dc=org";
 my $default_ldap_bind_dn = "cn=Directory Manager";
-my $default_ldap_pass    = "pass";
+my $default_ldap_pass    = "UoTM3rd";
 # good for testing/debugging:
 #my $default_ldap_filter = 
 #  "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
@@ -423,11 +423,9 @@ if (exists $opts->{a}) {
 ### get a list of zimbra accounts, compare to ldap accounts, delete
 ### zimbra accounts no longer in LDAP.
 
-print "\nfinished at ", `date`;
-print "\n";
 $rslt = $ldap->unbind;
-
-
+print "\nfinished at ";
+print `date`;
 
 
 ######
@@ -626,8 +624,8 @@ sub add_user($) {
                           "\n*** This error will re-occur for every ".
                           "user but".
 
-                          "\n*** this is the only notification you ".
-                          "will receive.\n";
+                          "\n*** this notification ".
+                          "will only repeat a few times.\n";
 
 		      $no_such_folder_notified = 1;
 		  }
@@ -804,7 +802,7 @@ sub find_and_apply_user_diffs {
 
 	    if (!defined($l_val_str)) {
 		print "unable to build value for $zattr, skipping..\n"
-		  if (exists $opts->{d});
+                    if (exists $opts->{d});
 		next;
 	    }
 	}
@@ -869,6 +867,8 @@ sub find_and_apply_user_diffs {
 
 	if (!exists $opts->{n}) {
 	    my $r = check_context_invoke($d, \$context);
+
+            # TODO: check result of invoke?
 
 	    if (exists $opts->{d}) {
 		print "response:\n";
@@ -1068,7 +1068,7 @@ sub build_zmailhost($) {
 	    return "mail05.domain.org";
 	} else {
 	    print "WARNING! SDP id /$org_id/ did not resolve to a valid ".
-		"zimbraMailHost.\n  This shouldn't be possible.. ";
+		"zimbraMailHost.\n  This shouldn't be possible..\n";
 	    return undef;
 	}
     } elsif ($zimbra_domain eq "dev.domain.org") {
