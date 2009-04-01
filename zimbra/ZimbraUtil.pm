@@ -18,7 +18,8 @@ use Net::LDAP;
 # searching for users to delete:
 # 5 == aaaaa*
 my $max_recurse = 5;
-my $debug=1;
+my $debug=0;
+my $printonly=0;
 
 # ldap defaults
 my %l_params = (
@@ -57,15 +58,9 @@ sub return_all_accounts {
 
 #####
 sub rename_all_archives {
-#    return operate_on_user_list(func=>\&rename_archives, 
-#                                filter=>"(|(uid=j*)(uid=k*))");
+    shift @_;  # get rid of the first argument: the object
 
-#    return operate_on_user_list(func=>\&rename_archives, 
-#                                filter=>"(uid=a*)");
-
-    return operate_on_user_list(func=>\&ooul_func_rename_archives,
-                                filter=>"(uid=a*)");
-
+    return operate_on_user_list(func=>\&ooul_func_rename_archives, @_);
 }
 
 
@@ -99,7 +94,13 @@ sub new {
        
         if ($k =~ /^g_/) {
             $debug = $args{$k}
-                if ($k == "g_debug");
+                if ($k eq "g_debug");
+
+            if ($k eq "g_printonly") {
+                $printonly = $args{$k};
+                print "printonly invoked, no changes will be made..\n\n";
+            }
+
             next;
         }
         
@@ -152,14 +153,12 @@ sub ooul_func_return_list($) {
 
 #######
 sub ooul_func_rename_archives($) {
-    my $r = shift;
+    #my $r = shift;
+    my ($r, %args) = @_;
+
 
     # bind to ldap
-#    my $ldap = Net::LDAP->new($ldap_host);
-#    my $rslt = $ldap->bind($binddn, password => $bindpass);
-#    $rslt->code && die "unable to bind as ", $binddn, ": ", $rslt->error;
-
-   my $ldap = Net::LDAP->new($l_params{l_host});
+    my $ldap = Net::LDAP->new($l_params{l_host});
     my $rslt = $ldap->bind($l_params{l_binddn}, password => $l_params{l_bindpass});
     $rslt->code && die "unable to bind as ", $l_params{l_binddn}, ": ", $rslt->error;
 
@@ -183,7 +182,6 @@ sub ooul_func_rename_archives($) {
         }
 
         # skip to next if we're on an archive account
-#        next unless (defined $mail && $mail !~ /$archive_suffix$/);
         next unless (defined $mail && $mail !~ /$z_params{z_archive_suffix}$/);
 
         # find corresponding user in ldap
@@ -195,22 +193,28 @@ sub ooul_func_rename_archives($) {
         
         $fil .= ")";
         
-#        $rslt = $ldap->search(base => "$ldap_base", filter => $fil);
         $rslt = $ldap->search(base => $l_params{l_base}, filter => $fil);
         $rslt->code && die "problem with search $fil: ".$rslt->error;  
 
         my $lusr = ($rslt->entries)[0];
 
         if (!defined $lusr) {
-            print "$mail is not in ldap!?\n";
+            print "\n$mail is not in ldap..\n";
             next;
         }
         
-        # get int employee id from ldap
-        my $int_empl_id = $lusr->get_value("orgghrsintemplidno");
+        # get internal employee id from ldap
+
+        my $int_empl_id;
+        if (exists $args{attr_frm_ldap}) {
+            $int_empl_id = $lusr->get_value($args{attr_frm_ldap});
+        } else {
+            die "no attribute received in ooul_func_rename_archives";
+        }
+        
 
         if ($amavis_to ne $archive) {
-            print "warning, amavisarchivequarantineto and zimbraarchiveaccount ".
+            print "\nwarning, amavisarchivequarantineto and zimbraarchiveaccount ".
                 "don't match for $uid:\n";
             print $amavis_to . " vs. ". $archive. "\n";
             #TODO: do something?
@@ -219,30 +223,8 @@ sub ooul_func_rename_archives($) {
         
         my $archive_usr_part = (split /@/, $archive)[0];
         if (lc $int_empl_id !~ lc $archive_usr_part) {
-            print "archive differs for $uid: $int_empl_id vs $archive\n";
-            # TODO: make sure archive exists.  Create it?  move it?
 
-#            my $archive_domain = "dev.domain.archive";
-
-            # rename archive account
-            # get zimbra id of archive for rename
-
-#             my $d2 = new XmlDoc();
-#             $d2->start('GetAccountRequest', $MAILNS);
-#             $d2->add('account', $MAILNS, { "by" => "name" }, $archive);
-#             $d2->end();
-            
-#             $r2 = check_context_invoke($d2, \$context);
-#             if ($r2->name eq "Fault") {
-#                 my $rsn = get_fault_reason($r2);
-#                 print "problem getting id for archive $archive.. aborting, moving on to next user\n";
-#                 print Dumper($r2);
-#                 next;
-#             }
-
-#             my $mc = $r2->find_child('account');
-
-
+            print "\n" unless ($amavis_to ne $archive);
 
             # get zimbra id of existing archive from zimbra
             my $archive_zimbra_id = get_archive_account_id($archive);
@@ -250,30 +232,52 @@ sub ooul_func_rename_archives($) {
             # build the name of the new archive
             my $new_archive = $int_empl_id . "@" . $z_params{z_archive_domain};
 
-            print "renaming $archive_zimbra_id ($archive) to $new_archive..\n";
-
             # rename archive account
-#             my $d = new XmlDoc();
-#             $d->start('RenameAccountRequest', $MAILNS);
-#             $d->add('id', $MAILNS, undef, $archive_zimbra_id);
-#             $d->add('newName', $MAILNS, undef, $new_archive);
+            if (defined $archive_zimbra_id) {
+                print "renaming $archive to $new_archive\n";
+                my $d = new XmlDoc();
+                $d->start('RenameAccountRequest', $MAILNS);
+                $d->add('id', $MAILNS, undef, $archive_zimbra_id);
+                $d->add('newName', $MAILNS, undef, $new_archive);
+                $d->end();
 
-#             my $r = check_context_invoke($d, \$context);
-#             if ($r->name eq "Fault") {
-#                 my $rsn = get_fault_reason($r);
+                unless ($printonly) {
+                    my $r = check_context_invoke($d, \$context);
+                    if ($r->name eq "Fault") {
+                        my $rsn = get_fault_reason($r);
+                        
+                        print "problem renaming user: $rsn\n";
+                        print Dumper($r);
+                        next;
+                    }
+                }
+            } else {
+                print "archive $archive does not exist for $mail.  ".
+                    "Only attributes will be changed.\n";
+            }
+            
+            # if that was successful or no id was found for the archive
+            # account change the attributes in the user account
+            
+            print "changing attributes in $mail to $new_archive..\n";
+            my $d2 = new XmlDoc();
+            $d2->start('ModifyAccountRequest', $MAILNS);
+            $d2->add('id', $MAILNS, undef, $zimbra_id);
+            $d2->add('a', $MAILNS, {"n" => "zimbraarchiveaccount"}, $new_archive);
+            $d2->add('a', $MAILNS, {"n" => "amavisarchivequarantineto"}, $new_archive);
+            $d2->end();
 
-#                 print "problem renaming user: $rsn\n";
-#                 print Dumper($r);
-#                 next;
-#             }
+            unless ($printonly) {
+                my $r2 = check_context_invoke($d2, \$context);
+                if ($r->name eq "Fault") {
+                    my $rsn = get_fault_reason($r2);
                     
-#             # if that's successful change the attributes in the user account
-#             my $d2 = new XmlDoc();
-#             $d2->start('ModifyAccountRequest', $MAILNS);
-#             $d2->add('id', $MAILNS, undef, $zimbra_id);
-#             $d2->add('a', $MAILNS, {"n" => "zimbraarchiveaccount"}, $int_emp...);
-#                      "amavisarchivequarantineto")
-
+                    print "problem setting attribures (zimbraarchiveaccount and ".
+                        "amavisarchivequarantineto):\n\t$rsn\n";
+                    print Dumper($r2);
+                    next;
+                }
+            }
         }
     }
 }
@@ -287,46 +291,28 @@ sub ooul_func_rename_archives($) {
 
 # Utility functions
 #####
-sub operate_on_user_list() {
+sub operate_on_user_list {
     my %args = @_;
 
     exists $args{func} || return undef;
     
     my $func = $args{func};
     my $search_fil = undef;
-    if (exists ($args{filter})) {
-        $search_fil = $args{filter};
-        print "set search filter: $search_fil\n";
-    }
 
-    #my $r = $SOAP->invoke($url, $d2->root(), $context);
     my $d = new XmlDoc;
+    $d->start('SearchDirectoryRequest', $MAILNS, {'types'  => "accounts"}); 
 
-#     $d->start('SearchDirectoryRequest', $MAILNS,
-#                {'sortBy' => "uid",
-#                 'attrs'  => "uid",
-#                 'types'  => "accounts"}
-#            ); 
-
-     $d->start('SearchDirectoryRequest', $MAILNS, {'types'  => "accounts"}); 
-
-
-    if (defined $search_fil) {
-
-        #print "searching with fil $search_fil\n" if $debug;
-        $d->add('query', $MAILNS, { "types" => "accounts" }, $search_fil);
+    if (exists $args{filter}) {
+        print "searching with fil $args{filter}\n" if $debug;
+        $d->add('query', $MAILNS, { "types" => "accounts" }, $args{filter});
     } else {
         $d->add('query', $MAILNS, { "types" => "accounts" });
     }
-    
-# $d2->end();
-
 
     my $r = check_context_invoke($d, \$context);
 
     my @l;
     if ($r->name eq "Fault") {
-
         my $rsn = get_fault_reason($r);
         
         # break down the search by alpha/numeric if reason is 
@@ -336,23 +322,15 @@ sub operate_on_user_list() {
                 "\trecursing deeper to return fewer results.\n"
                 if $debug;
 
-            
-            # @l = get_list_in_range(undef, "a", "z");
-            @l = operate_on_range(undef, "a", "z", $func, $search_fil);
+            @l = operate_on_range(undef, "a", "z", $func, %args);
         } else {
             print "unhandled reason: $rsn, exiting.\n";
             exit;
         }
     } else {
-#         if ($r->name ne "account") {
-#             print "skipping delete, unknown record type returned: ", $r->name, "\n";
-#             return;
-#         }
-        
         print "returned ", $r->num_children, " children\n";
         
-        #@l = parse_and_return_list($r);
-        @l = $func->($r);
+        @l = $func->($r, %args);
     }
 
     return @l;
@@ -369,12 +347,18 @@ sub operate_on_user_list() {
 #sub get_list_in_range($$$) {
 sub operate_on_range {
     #my ($prfx, $beg, $end) = @_;
-    my ($prfx, $beg, $end, $func, $search_fil) = @_;
+    my ($prfx, $beg, $end, $func, %args) = @_;
 
 #     print "deleting ";
 #     print "${beg}..${end} ";
 #     print "w/ prfx $prfx " if (defined $prfx);
 #     print "\n";
+
+    
+    my $search_fil;
+    
+    $search_fil = $args{filter}
+        if (exists $args{filter});
 
     my @l;
 
@@ -426,7 +410,7 @@ sub operate_on_range {
 		}
 
 		# push @l, get_list_in_range ($prfx2pass, $beg, $end);
-                push @l, operate_on_range ($prfx2pass, $beg, $end, $func, $search_fil);
+                push @l, operate_on_range ($prfx2pass, $beg, $end, $func, %args);
 		decrement_del_recurse();
 	    } else {
 		print "unhandled reason: $rsn, exiting.\n";
@@ -435,7 +419,7 @@ sub operate_on_range {
 
  	} else {
 	    # push @l, parse_and_return_list($r);
-	    push @l, $func->($r);
+	    push @l, $func->($r, %args);
         }
     }
 
