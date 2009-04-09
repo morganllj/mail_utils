@@ -114,7 +114,7 @@ sub new {
 
     $SOAP = $Soap::Soap12;
 
-    $context = get_context();
+    $context = get_zimbra_context();
 
     return $self;
 }
@@ -213,7 +213,7 @@ sub ooul_func_rename_archives($) {
         }
         
 
-        if ($amavis_to ne $archive) {
+        if (defined($amavis_to) && defined($archive) && $amavis_to ne $archive) {
             print "\nwarning, amavisarchivequarantineto and zimbraarchiveaccount ".
                 "don't match for $uid:\n";
             print $amavis_to . " vs. ". $archive. "\n";
@@ -221,6 +221,11 @@ sub ooul_func_rename_archives($) {
         }
         
         
+        if (!defined $archive) {
+            print "no zimbraArchiveAccount for $uid, no action taken.\n";
+            return;
+        }
+
         my $archive_usr_part = (split /@/, $archive)[0];
         if (lc $int_empl_id !~ lc $archive_usr_part) {
 
@@ -447,7 +452,7 @@ BEGIN {
 
 
 ######
-sub get_context {
+sub get_zimbra_context {
 
     # authenticate to Zimbra admin url
     my $d = new XmlDoc;
