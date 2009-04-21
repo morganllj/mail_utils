@@ -653,7 +653,7 @@ sub build_archive_account($) {
 sub get_exclude_list() {
     
     my $r = $ldap->search(base => $ldap_base, filter => $exclude_group_rdn);
-    $r->code && die "problem retrieving exclude list:" . $rslt->error;
+    $r->code && die "problem retrieving exclude list: " . $r->error;
 
     my @e = $r->entries;  # do we need to check for multiple entries?
 
