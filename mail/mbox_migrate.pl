@@ -1,4 +1,4 @@
-#!/usr/local/bin/perl -w
+#!/opt/csw/bin/perl -w
 #
 # mbox_migrate.pl
 # Original:
@@ -7,6 +7,11 @@
 #
 # Id: $Id$
 # 
+BEGIN {
+    push @INC, "/usr/local/lib/perl5/5.8.0";
+    push @INC, "/usr/local/lib/perl5/site_perl/5.8.0";
+}
+
 use strict;
 use Email::Folder;
 use MIME::Parser;
@@ -42,19 +47,29 @@ my $imap;
 unless ($opts->{n}) {
     $imap = Mail::IMAPClient->new (
         Server => $host,
+        Port => "7143",
         User   => $user,
         Password => $pass
     ) or die "can't connect to imap server $host: $@";
 }
 
 foreach (@messages){
+
     $count++;
     my $parser = new MIME::Parser;
-    $parser->output_under("/tmp");
+    # $parser->output_under("/home/morgan/zimbra_migration/tmp");
+    # $parser->output_under("/home/morgan/zimbra_migration/tmp");
+    $parser->output_to_core(1);
     $parser->decode_headers(0);
     $parser->ignore_errors(1);
 #    print "entry: /",$_->as_string,"/\n";
+    
+#    print "*** parse_data", `date`;
     my $entity = $parser->parse_data($_->as_string);
+#    print "*** done parse_data", `date`;
+
+
+
     my $header = $entity->head;
     my $sender = $entity->head->get('From');
 
@@ -67,6 +82,7 @@ foreach (@messages){
     chomp $subject;
     next if $subject =~ m/FOLDER INTERNAL/;
     $entity->head($header);
+
     $entity->sync_headers;
 
     if (!defined $status) { 
@@ -83,19 +99,17 @@ foreach (@messages){
 
     print "[$user][$count/$total][$status] " . $subject . "\n";
 
-    my $flags = "\\Seen" if $status =~ /^[RO]+$/;
-    my $rfc2060_date = undef;  # it's okay to pass undef to append_string()
-    if (defined $date) {
-        #$rfc2060_date = $imap->Rfc2060_date($since_epoch);
-        $rfc2060_date = Rfc2060_date($date);
-    }
-#    print "rfc2060 date: /$rfc2060_date/\n";
+     my $flags = "\\Seen" if $status =~ /^[RO]+$/;
+     my $rfc2060_date = undef;  # it's okay to pass undef to append_string()
+     if (defined $date) {
+         #$rfc2060_date = $imap->Rfc2060_date($since_epoch);
+         $rfc2060_date = Rfc2060_date($date);
+     }
 
     unless ($opts->{n}) {
        # try to append with date, append without date otherwise, then complain
        unless ($imap->append_string("INBOX", $entity->as_string(), $flags, 
                 $rfc2060_date)) {
-           print "in unless\n";
            $imap->append_string("INBOX", $entity->as_string(), $flags) ||
 	    warn "MESSAGE SKIPPED: $@\n";
        }
@@ -133,13 +147,18 @@ sub Rfc2060_date($) {
          localtime($since_epoch);
     $year += 1900;
 
-    my $tz = (split /\s+/, $d)[-1];
+    # print "d: /$d/\n";
+    $_ = $d;
+    # my $tz = (split /\s+/, $d)[-1];
+    my ($tz) = /([-+]{1}[0-9]{4})/;
 
-    if ($tz !~ /[-+]{1}[0-9]{4}/) {
+#    print "tz: /$tz/\n";
+
+    if (!defined $tz || $tz !~ /[-+]{1}[0-9]{4}/) {
         $tz = "-0000";
     }
 
     # dd-Mon-yyyy hh:mm:ss +0000
     return sprintf "%2d-%s-%4d %2d:%2d:%2d %s", 
-           $mday, $mnt[$mon-1], $year, $hour, $min, $sec, $tz;
+           $mday, $mnt[$mon], $year, $hour, $min, $sec, $tz;
 }
