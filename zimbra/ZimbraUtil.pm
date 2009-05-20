@@ -25,7 +25,7 @@ my $printonly=0;
 my %l_params = (
     l_host => "ldap0.domain.org",
     l_binddn => "cn=directory manager",
-    l_bindpass => "pass",
+    l_bindpass => "UoTM3rd",
     l_base => "dc=domain,dc=org",
 );
 
@@ -514,7 +514,7 @@ sub get_account_id($) {
 #  The idea is to catch an expired auth token on the fly so as to not 
 #  interrupt the running script.
 sub check_context_invoke {
-    my ($d, $context_ref) = @_;
+    my ($d, $context_ref, $parent_pid) = @_;
 
     my $r = $SOAP->invoke($z_params{z_url}, $d->root(), $$context_ref);
 
@@ -527,10 +527,12 @@ sub check_context_invoke {
 	    $$context_ref = get_zimbra_context();
 	    $r = $SOAP->invoke($z_params{z_url}, $d->root(), $$context_ref);
 
-# 	    print "killing $parent_pid to cause global ".
-# 		"\$context to be reloaded..\n"
-#                 if (defined $debug);
-# 	    kill('HUP', $parent_pid);
+            if (defined ($parent_pid)) {
+                print "killing $parent_pid to cause global ".
+                    "\$context to be reloaded..\n"
+                        if (defined $debug);
+                kill('HUP', $parent_pid);
+            }
 	    if ($r->name eq "Fault") {
 		$rsn = get_fault_reason($r);
 		if (defined $rsn && $rsn =~ /AUTH_EXPIRED/) {

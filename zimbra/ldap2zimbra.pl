@@ -18,14 +18,40 @@
 # *****************************
 
 
+use POSIX ":sys_wait_h";
+use IO::Handle;
+use ZimbraUtil;
+use strict;
+use Getopt::Std;
+use Net::LDAP;
+use Data::Dumper;
+use XmlElement;
+use XmlDoc;
+use Soap;
+$|=1;
+
+sub print_usage();
+sub add_user($);
+sub sync_user($$);
+sub get_z_user($);
+sub fix_case($);
+sub build_target_z_value($$$);
+sub delete_not_in_ldap();
+sub delete_in_range($$$);
+sub parse_and_del($);
+sub renew_context();
+sub in_exclude_list($);
+sub get_exclude_list();
+sub build_archive_account($);
+
+
 ##################################################################
 #### Site-specific settings
 #
 # The Zimbra SOAP libraries.  Download and uncompress the Zimbra
 # source code to get them.
 use lib "/usr/local/zcs-5.0.2_GA_1975-src/ZimbraServer/src/perl/soap";
-use POSIX ":sys_wait_h";
-use IO::Handle;
+
 # these accounts will never be added, removed or modified
 #   It's a perl regex
 my $exclude_group_rdn = "cn=orgexcludes";  # assumed to be in $ldap_base
@@ -102,47 +128,28 @@ my $default_ldap_filter = "(objectclass=orgZimbraPerson)";
 #### End Site-specific settings
 #############################################################
 
+my $no_such_folder_notified = 0;
 
 
 
-use strict;
-use Getopt::Std;
-use Net::LDAP;
-use Data::Dumper;
-use XmlElement;
-use XmlDoc;
-use Soap;
-$|=1;
 
-sub print_usage();
-sub add_user($);
-sub sync_user($$);
-sub get_z_user($);
-sub fix_case($);
-sub build_target_z_value($$$);
-sub delete_not_in_ldap();
-sub delete_in_range($$$);
-sub parse_and_del($);
-sub renew_context();
-sub in_exclude_list($);
-sub get_exclude_list();
-sub build_archive_account($);
+#my $opts;
+my %opts;
+my %arg_h;
+# getopts('hl:D:w:b:em:ndz:s:p:a', \%$opts);
+getopts('hl:D:w:b:em:ndz:s:p:a', \%opts);
 
+$opts{h}                     && print_usage();
+my $ldap_host = $opts{l}     || $default_ldap_host;
+my $ldap_base = $opts{b}     || $default_ldap_base;
+my $binddn =    $opts{D}     || $default_ldap_bind_dn;
+my $bindpass =  $opts{w}     || $default_ldap_pass;
+my $zimbra_svr = $opts{z}    || $default_zimbra_svr;
+my $zimbra_domain = $opts{m} || $default_domain;
+my $zimbra_pass = $opts{p}   || $default_zimbra_pass;
+my $subset_str = $opts{s};
 
-my $opts;
-getopts('hl:D:w:b:em:ndz:s:p:a', \%$opts);
-
-$opts->{h}                     && print_usage();
-my $ldap_host = $opts->{l}     || $default_ldap_host;
-my $ldap_base = $opts->{b}     || $default_ldap_base;
-my $binddn =    $opts->{D}     || $default_ldap_bind_dn;
-my $bindpass =  $opts->{w}     || $default_ldap_pass;
-my $zimbra_svr = $opts->{z}    || $default_zimbra_svr;
-my $zimbra_domain = $opts->{m} || $default_domain;
-my $zimbra_pass = $opts->{p}   || $default_zimbra_pass;
-my $subset_str = $opts->{s};
-
-my $multi_domain_mode = $opts->{u} || "0";  # the default is to treat
+my $multi_domain_mode = $opts{u} || "0";  # the default is to treat
 					    # all users as in the
 					    # default domain --
 					    # basically take the 'uid'
@@ -153,6 +160,32 @@ my $multi_domain_mode = $opts->{u} || "0";  # the default is to treat
 my $archive_domain = $zimbra_domain . ".archive";
 
 my $fil = $default_ldap_filter;
+
+
+# TODO handle unimplemented args:
+for my $k (keys %opts) {
+    if    ($k eq "h")   { print_usage() }
+    elsif ($k eq "l")   { $arg_h{l_host}      = $opts{l}; }
+    elsif ($k eq "D")   { $arg_h{l_binddn}    = $opts{D}; } 
+    elsif ($k eq "w")   { $arg_h{l_bindpass}  = $opts{w}; }
+    elsif ($k eq "b")   { $arg_h{l_base}      = $opts{b}; }
+    elsif ($k eq "z")   { $arg_h{z_server}    = $opts{z}; }
+    elsif ($k eq "m")   { $arg_h{z_domain}    = $opts{m}; }
+    elsif ($k eq "p")   { $arg_h{z_pass}      = $opts{p}; }
+    elsif ($k eq "e")   { print "extensive (-e) option not yet implemented\n"; }
+    elsif ($k eq "n")   { $arg_h{g_printonly} = 1; }
+    elsif ($k eq "d")   { $arg_h{g_debug}     = 1; }
+#     elsif ($k eq "s")   { # $arg_h{l_subset)..
+#                           print "subset (-s) option not yet implemented\n"; }
+    elsif ($k eq "h")   { print_usage(); }
+#    else                { print "unimplemented option: -${k}:"; 
+#                          print_usage(); }
+}
+
+
+
+
+my $zu = new ZimbraUtil(%arg_h);
 
 # url for zimbra store.  It can be any of your stores
 # my $url = "https://dmail01.domain.org:7071/service/admin/soap/";
@@ -171,10 +204,10 @@ my $subset;
 my $archive_accts;
 
 print "-n used, no changes will be made.\n"
-    if (exists $opts->{n});
+    if (exists $opts{n});
 print "-a used, archive accounts will be synced--".
     "this will almost double run time.\n"
-    if (exists $opts->{a});
+    if (exists $opts{a});
 
 if (defined $subset_str) {
     for my $u (split /\s*,\s*/, $subset_str) {$subset->{lc $u} = 0;}
@@ -195,7 +228,7 @@ $rslt->code && die "unable to bind as ", $binddn, ": ", $rslt->error;
 my @exclude_list = get_exclude_list();  # this must be run before
 					# in_exclude_list
 
-my $context = get_zimbra_context();
+my $context = $zu->get_zimbra_context();
 
 # search users out of ldap
 # here:
@@ -208,6 +241,7 @@ print "\nadd/modify phase..", `date`;
 
 my $pids;  # keep track of PIDs as child processes run
 $SIG{HUP} = \&renew_context; # handler to cause context to be reloaded.
+$SIG{USR1} = \&set_calendar_notified; 
 my $parent_pid; # used by check_context_invoke in the children: it
 		# needs to know the proc to kill to tell the parent to
 		# reload a stale $context
@@ -257,7 +291,7 @@ for my $lusr (@ldap_entries) {
 
       if (in_exclude_list($usr)) {
    	print "skipping special user $usr\n"
-   	    if (exists $opts->{d});
+   	    if (exists $opts{d});
    	next;
       }
 
@@ -275,7 +309,7 @@ for my $lusr (@ldap_entries) {
 	$pidcount = keys %$pids;
 
  	print "pidcount: $pidcount, parallelism: $parallelism\n"
- 	    if (exists $opts->{d});
+ 	    if (exists $opts{d});
 
 	# fork a process if there are less than $parallelism processes
 	# running and there are users left to process.
@@ -291,20 +325,14 @@ for my $lusr (@ldap_entries) {
 
                 my $child_status_file = $child_status_path . "/" . $parent_pid.".".$$.".childout\n";
 
-# 		print "opening for writing: ". $child_status_path . "/" . $parent_pid.".".$$.".childout\n"
-# 		    if (exists $opts->{d});
-# 		open CHILD_WTR, ">". $child_status_path . "/" . $parent_pid.".".$$.".childout"
-# 		    || die "can't open for writing: " . 
-# 		    $child_status_path . "/" . $parent_pid.".".$$.".childout";
-
 		print "opening for writing: ". $child_status_file
-		    if (exists $opts->{d});
+		    if (exists $opts{d});
 		open CHILD_WTR, ">". $child_status_file
 		    || die "can't open for writing: " . $child_status_file;
 
 		for my $u (keys %$usrs) {
 		    print "\nworking on ", $u, " ($$) ", `date`
-			if (exists $opts->{d});
+			if (exists $opts{d});
 		    ### check for a corresponding zimbra account
 		    my $zu_h = get_z_user($u);
 		    if (!defined $zu_h) {
@@ -338,16 +366,12 @@ for my $lusr (@ldap_entries) {
 
 	    if ($ret<0 || $ret>0) {
 		print "process $ret finished..\n"
-		    if (exists $opts->{d});
+		    if (exists $opts{d});
 		
 		my $child_status_file = $child_status_path . "/" . $parent_pid.".".$ret.".childout";
 
                 die "can't read child status file: ". $child_status_file
                     if (! -r $child_status_file);
-
-# 		open FROM_CHILD, $child_status_path . "/" . $parent_pid.".".$ret.".childout" ||
-# 		    die "can't open for reading: ".
-# 		    $child_status_path . "/" . $parent_pid.".".$ret.".childout";
 
 		open FROM_CHILD, $child_status_file ||
 		    die "can't open for reading: " . $child_status_file;
@@ -355,11 +379,10 @@ for my $lusr (@ldap_entries) {
 		while (<FROM_CHILD>) {
 		    chomp;
 		    print "from child: /$_/\n"
-		      if exists ($opts->{d});
+		      if exists ($opts{d});
 		    $all_users->{$_} = 1;
 		}
 		close (FROM_CHILD);
-#		unlink ($child_status_path . "/" . $parent_pid.".".$ret.".childout");
 		unlink $child_status_file;
 		delete $pids->{$ret};
 		$proc_reclaimed = 1;
@@ -372,7 +395,7 @@ for my $lusr (@ldap_entries) {
 	#   are busy.
 	unless ($proc_reclaimed) {
 	    print "sleeping ", $sleep_count, ": no processes reclaimed...\n"
-		if (exists $opts->{d});
+		if (exists $opts{d});
 	    sleep $sleep_count;
 	    $sleep_count += 5;
 
@@ -393,7 +416,7 @@ for my $lusr (@ldap_entries) {
 }
 
 
-if (exists $opts->{e}) {
+if (exists $opts{e}) {
     # delete accounts that are not in ldap
     print "\ndelete phase, ",`date`;
     delete_not_in_ldap();
@@ -402,7 +425,7 @@ if (exists $opts->{e}) {
 }
 
 
-if (exists $opts->{a}) {
+if (exists $opts{a}) {
     # sync archive accounts.  We do this last as it more than doubles the
     # run time of the script and it's not critical.
     # TODO: parallelize this?
@@ -410,7 +433,7 @@ if (exists $opts->{a}) {
     for my $acct_name (keys %$archive_accts) {
 
 	print "\nworking on archive $acct_name ", " ", `date`
-	    if (exists $opts->{d});
+	    if (exists $opts{d});
 
  	find_and_apply_user_diffs($archive_accts->{$acct_name}, 
 				  get_z_user($acct_name), 1);
@@ -453,7 +476,7 @@ sub add_user($) {
 
 	if (!defined($v)) {
 	    print "unable to build value for $zattr, skipping..\n"
-	      if (exists $opts->{d});
+	      if (exists $opts{d});
 	    next;
 	}
 
@@ -462,15 +485,15 @@ sub add_user($) {
     $d->end();
 
     my $o;
-    if (exists $opts->{d}) {
+    if (exists $opts{d}) {
 	print "here's what we're going to change:\n";
 	$o = $d->to_string("pretty")."\n";
 	$o =~ s/ns0\://g;
 	print $o."\n";
     }
 
-    if (!exists $opts->{n}) {
-	my $r = check_context_invoke($d, \$context);
+    if (!exists $opts{n}) {
+	my $r = $zu->check_context_invoke($d, \$context, $parent_pid);
 
 	if ($r->name eq "Fault") {
 	    print "problem adding user:\n";
@@ -486,13 +509,13 @@ sub add_user($) {
 		}
 	    }
 	}
-	if (exists $opts->{d} && !exists $opts->{n}) {
+	if (exists $opts{d} && !exists $opts{n}) {
 	    $o = $r->to_string("pretty");
 	    $o =~ s/ns0\://g;
 	    print $o."\n";
 	}
 
-	add_global_calendar($mail);
+	add_global_calendar($mail, $parent_pid);
     }
 
 
@@ -501,7 +524,7 @@ sub add_user($) {
     # get the archive name
     my $archive_acct_name = build_archive_account($lu);
 
-    if (!defined(get_archive_account_id($archive_acct_name))) {
+    if (!defined($zu->get_archive_account_id($archive_acct_name))) {
 	# if the archive doesn't exist add it.
  	add_archive_acct($lu);
     } else {
@@ -539,10 +562,10 @@ sub add_user($) {
 			 $acct_name);
 		$d2->end();
 		
-		my $r2 = check_context_invoke($d2, \$context);
+		my $r2 = $zu->check_context_invoke($d2, \$context, $parent_pid);
 
 		if ($r2->name eq "Fault") {
-		    my $rsn = get_fault_reason($r2);
+		    my $rsn = $zu->get_fault_reason($r2);
 		    if ($rsn ne "account.NO_SUCH_ACCOUNT") {
 			print "problem searching out archive $acct_name\n";
 			print Dumper($r2);
@@ -565,11 +588,12 @@ sub add_user($) {
 }
 
 
-{ my $no_such_folder_notified = 0;  # remember if we've notified about
+#{ my $no_such_folder_notified = 0;  # remember if we've notified about
 				    # a mail.NO_SUCH_FOLDER error so
 				    # we don't notify over and over.
-  sub add_global_calendar($) {
+  sub add_global_calendar($$) {
       my $mail = shift;
+      my $parent_pid = shift;
 
       # delegate auth to the user
       my $d = new XmlDoc;
@@ -578,7 +602,7 @@ sub add_user($) {
 	      $mail);
       $d->end();
 
-      my $r = check_context_invoke($d, \$context);
+      my $r = $zu->check_context_invoke($d, \$context, $parent_pid);
 
       if ($r->name eq "Fault") {
 	  print "fault while delegating auth to $mail:\n";
@@ -605,29 +629,35 @@ sub add_user($) {
 		"name" => $cal_name});
       $d2->end();
 
-      if (!exists $opts->{n}) {
-	  my $r2 = check_context_invoke($d2, \$new_context);
+      if (!exists $opts{n}) {
+	  my $r2 = $zu->check_context_invoke($d2, \$new_context, $parent_pid);
 
 	  if ($r2->name eq "Fault") {
-	      my $rsn = get_fault_reason($r2);
+	      my $rsn = $zu->get_fault_reason($r2);
 	      
 	      if ($rsn eq "mail.ALREADY_EXISTS") {
 		  # do nothing
 	      } elsif ($rsn eq "mail.NO_SUCH_FOLDER") { 
 		  unless ($no_such_folder_notified) {
-		      print "\n*** ERROR: There is no calendar named ".
-                          "$cal_name under".
-                     
-			  "\n*** user $cal_owner.  No calendar will be ".
-                          "shared.".
 
-                          "\n*** This error will re-occur for every ".
-                          "user but".
-
-                          "\n*** this notification ".
-                          "will only repeat a few times.\n";
+ 		      print "\n*** ERROR: There is no calendar named $cal_name under".
+                          "\n*** user $cal_owner.  No calendar will be shared.".
+                          "\n*** This error will re-occur for every user but".
+                          "\n*** this notification will only show once".
 
 		      $no_such_folder_notified = 1;
+
+                      if (defined ($parent_pid)) {
+
+                          # TODO: move uncomment this when it is moved
+                          # to ZimbraUtil or reconcile with debug
+                          # setting in ldap2zimbra.
+#                           print "killing $parent_pid to cause global ".
+#                               "\$context to be reloaded..\n"
+#                                   if (defined $debug);
+#                           kill('USR1', $parent_pid);
+                      }
+
 		  }
 	      } else {
 		  print "\nFault during calendar create mount:\n";
@@ -638,9 +668,10 @@ sub add_user($) {
 	  }
       }
   }
-}
+#}
 
 
+######
 # build a new archive account from $lu
 sub build_archive_account($) {
     my $lu = shift;
@@ -699,35 +730,6 @@ sub get_archive_cos_id($) {
 }
 
 
-######
-sub get_archive_account_id($) {
-    my $a = shift;
-
-    my $d2 = new XmlDoc;
-    $d2->start('GetAccountRequest', $MAILNS); 
-    $d2->add('account', $MAILNS, { "by" => "name" }, $a);
-    $d2->end();
-    
-    my $r2 = check_context_invoke($d2, \$context);
-
-    if ($r2->name eq "Fault") {
-	my $rsn = get_fault_reason($r2);
-	if ($rsn ne "account.NO_SUCH_ACCOUNT") {
-	    print "problem searching out archive $a\n";
-	    print Dumper($r2);
-	    return;
-	}
-    }
-
-    my $mc = $r2->find_child('account');
-
-    return $mc->attrs->{id}
-        if (defined $mc);
-	
-    return undef;
-}
-
-
 
 ######
 sub sync_user($$) {
@@ -740,23 +742,23 @@ sub sync_user($$) {
     my $archive_acct_name = get_archive_account($zu);    
     
     if (!defined ($archive_acct_name)) {
-	if (!defined(get_archive_account_id(build_archive_account($lu)))) {
+	if (!defined($zu->get_archive_account_id(build_archive_account($lu)))) {
 	    # the archive account in the user does not exist.
 	    add_archive_acct($lu);
 	}
     } else {
 	#$all_users->{$archive_acct_name} = 1;
 	print "writing existing archive to parent ($$): $archive_acct_name\n"
-	    if (exists $opts->{d});
+	    if (exists $opts{d});
 	print CHILD_WTR "$archive_acct_name\n";
 
 	# store the archive account name and the ldap user object for
 	# later syncing.
 	$archive_accts->{$archive_acct_name} = $lu
-	    if (exists $opts->{a});
+	    if (exists $opts{a});
     }
 
-    add_global_calendar((@{$zu->{mail}})[0]);
+    add_global_calendar((@{$zu->{mail}})[0], $parent_pid);
 }
 
 
@@ -802,15 +804,10 @@ sub find_and_apply_user_diffs {
 
 	    if (!defined($l_val_str)) {
 		print "unable to build value for $zattr, skipping..\n"
-                    if (exists $opts->{d});
+                    if (exists $opts{d});
 		next;
 	    }
 	}
-
-# 	if (!defined($l_val_str)) {
-# 	    print "$zattr is not defined, can't add user.  Aborting.\n";
-# 	    return;
-# 	}
 
  	if (($zattr =~ /amavisarchivequarantineto/i ||
  	    $zattr =~ /zimbraarchiveaccount/i) && 
@@ -829,11 +826,11 @@ sub find_and_apply_user_diffs {
 	if ($l_val_str ne $z_val_str) {
 	    
 	    if ($diff_found == 0) {
-		print "\n" if (!exists $opts->{d});
+		print "\n" if (!exists $opts{d});
 		print "syncing ", (@{$zu->{mail}})[0], "\n";
 	    }
 	    
-	    if (exists $opts->{d}) {
+	    if (exists $opts{d}) {
 		print "different values for $zattr:\n".
 		    "\tldap:   $l_val_str\n".
 		    "\tzimbra: $z_val_str\n";
@@ -865,12 +862,12 @@ sub find_and_apply_user_diffs {
 	$o =~ s/ns0\://g;
 	print $o;
 
-	if (!exists $opts->{n}) {
-	    my $r = check_context_invoke($d, \$context);
+	if (!exists $opts{n}) {
+	    my $r = $zu->check_context_invoke($d, \$context, $parent_pid);
 
             # TODO: check result of invoke?
 
-	    if (exists $opts->{d}) {
+	    if (exists $opts{d}) {
 		print "response:\n";
 		$o = $r->to_string("pretty");
 		$o =~ s/ns0\://g;
@@ -1098,10 +1095,10 @@ sub get_z_user($) {
     $d->add('account', $MAILNS, { "by" => "name" }, $u);
     $d->end();
 
-    my $r = check_context_invoke($d, \$context);
+    my $r = $zu->check_context_invoke($d, \$context, $parent_pid);
 
     if ($r->name eq "Fault") {
-	my $rsn = get_fault_reason($r);
+	my $rsn = $zu->get_fault_reason($r);
 	if ($rsn ne "account.NO_SUCH_ACCOUNT") {
 	    print "problem searching out user:\n";
 	    print Dumper($r);
@@ -1260,17 +1257,17 @@ sub delete_not_in_ldap() {
     { $d->add('query', $MAILNS, { "types" => "accounts" });} 
     $d->end();
 
-    $r = check_context_invoke($d, \$context);
+    $r = $zu->check_context_invoke($d, \$context, $parent_pid);
 
     if ($r->name eq "Fault") {
-	my $rsn = get_fault_reason($r);
+	my $rsn = $zu->get_fault_reason($r);
 
 	# break down the search by alpha/numeric if reason is 
 	#    account.TOO_MANY_SEARCH_RESULTS
 	if (defined $rsn && $rsn eq "account.TOO_MANY_SEARCH_RESULTS") {
 	    print "\tfault due to $rsn\n".
 	      "\trecursing deeper to return fewer results.\n"
-		if (exists $opts->{d});
+		if (exists $opts{d});
 	    
 	    delete_in_range(undef, "a", "z");
 	    return;
@@ -1288,54 +1285,19 @@ sub delete_not_in_ldap() {
 
 
 
-# check for and correct expired authentication during invoke.
-#  The idea is to catch an expired auth token on the fly so as to not 
-#  interrupt the running script.
-sub check_context_invoke {
-    my ($d, $context_ref) = @_;
-
-    my $r = $SOAP->invoke($url, $d->root(), $$context_ref);
-
-    if ($r->name eq "Fault") {
-	my $rsn = get_fault_reason($r);
-	if (defined $rsn && $rsn =~ /AUTH_EXPIRED/) {
-	    # authentication timed out, re-authenticate and re-try the invoke
-	    print "\tfault due to $rsn at ", `date`;
-	    print "\tre-authenticating..\n";
-	    $$context_ref = get_zimbra_context();
-	    $r = $SOAP->invoke($url, $d->root(), $$context_ref);
-
-	    print "killing $parent_pid to cause global ".
-		"\$context to be reloaded..\n"
-		if (exists $opts->{d});
-	    kill('HUP', $parent_pid);
-	    if ($r->name eq "Fault") {
-		$rsn = get_fault_reason($r);
-		if (defined $rsn && $rsn =~ /AUTH_EXPIRED/) {
-		    print "got $rsn *again* ... ".
-			"this shouldn't happen, exiting.\n";
-		    print Dumper($r);
-		    exit;
-		} else {
-		    # we got a fault of some other sort, return to the
-		    # caller to handle the fault
-		    return $r;
-		}
-	    }
-	}
-    }
-    return $r;
-}
-
-
-
 ######
 # renew global $context--usually in response to a signal from a child
 sub renew_context () {
     print "renewing global context in response to signal in proc $$"
-	if (exists($opts->{d}));
+	if (exists($opts{d}));
 
-    $context = get_zimbra_context();
+    $context = $zu->get_zimbra_context();
+}
+
+
+#######
+sub set_calendar_notified() {
+    $no_such_folder_notified = 1;
 }
 
 
@@ -1363,7 +1325,7 @@ sub delete_in_range($$$) {
 	$d->add('query', $MAILNS, undef, $fil);
 	$d->end;
 
-	my $r = check_context_invoke($d, \$context);
+	my $r = $zu->check_context_invoke($d, \$context, $parent_pid);
 # debugging:
 # 	if ($r->name eq "Fault" || !defined $prfx || 
 #	    scalar (split //, $prfx) < 6 ) {
@@ -1436,7 +1398,7 @@ sub parse_and_del($) {
 	# skip special users
         if (in_exclude_list($uid)) {
 	    print "\tskipping special user $uid\n"
-		if (exists $opts->{d});
+		if (exists $opts{d});
 	    next;
 	}
 
@@ -1455,10 +1417,10 @@ sub parse_and_del($) {
  	    $d->add('id', $MAILNS, undef, $z_id);
  	    $d->end();
 
- 	    if (!exists $opts->{n}){
-		my $r = check_context_invoke($d, \$context);
+ 	    if (!exists $opts{n}){
+		my $r = $zu->check_context_invoke($d, \$context, $parent_pid);
 
-		if (exists $opts->{d}) {
+		if (exists $opts{d}) {
 		    my $o = $r->to_string("pretty");
 		    $o =~ s/ns0\://g;
 		    print $o."\n";
@@ -1469,48 +1431,8 @@ sub parse_and_del($) {
 }
     
 
-sub get_fault_reason {
-    my $r = shift;
-
-    # get the reason for the fault
-    for my $v (@{$r->children()}) {
-        if ($v->name eq "Detail") {
-	    for my $v2 (@{@{$v->children()}[0]->children()}) {
-		if ($v2->name eq "Code") {
-		    return $v2->content;
-		}
-	    }
-	}
-    }
-
-    return "<no reason found..>";
-}
-
-
-sub get_zimbra_context {
-
-    # authenticate to Zimbra admin url
-    my $d = new XmlDoc;
-    $d->start('AuthRequest', $ACCTNS);
-    $d->add('name', undef, undef, "admin");
-    $d->add('password', undef, undef, $zimbra_pass);
-    $d->end();
-
-    # get back an authResponse, authToken, sessionId & context.
-    my $authResponse = $SOAP->invoke($url, $d->root());
-
-    my $authToken = $authResponse->find_child('authToken')->content;
-    # this needs to global to allow delegated auth to work..
-    $sessionId = $authResponse->find_child('sessionId')->content;
-
-    return $SOAP->zimbraContext($authToken, $sessionId);
-}
-
-
-
-
+######
 sub add_archive_acct {
-    #my ($lu, $z2l) = @_;
     my ($lu) = shift;
 
     my $z2l = get_z2l("archive");
@@ -1519,10 +1441,8 @@ sub add_archive_acct {
 
     print "adding archive: ", $archive_account,
         " for ", $lu->get_value("uid"), "\n";
-#    $all_users->{(split /\@/, $archive_account)[0]} = 1;
-    #$all_users->{$archive_account} = 1;
     print "writing newly created archive to parent ($$): $archive_account\n"
-	if (exists $opts->{d});
+	if (exists $opts{d});
     print CHILD_WTR "$archive_account\n";
 
     my $d3 = new XmlDoc;
@@ -1545,22 +1465,22 @@ sub add_archive_acct {
     $d3->end();
 
     my $o;
-    if (exists $opts->{d}) {
+    if (exists $opts{d}) {
 	print "here's what we're going to change:\n";
 	$o = $d3->to_string("pretty")."\n";
 	$o =~ s/ns0\://g;
 	print $o."\n";
     }
 
-    if (!exists $opts->{n}) {
-	my $r3 = check_context_invoke($d3, \$context);
+    if (!exists $opts{n}) {
+	my $r3 = $zu->check_context_invoke($d3, \$context, $parent_pid);
 
 	if ($r3->name eq "Fault") {
 	    print "problem adding user:\n";
 	    print Dumper $r3;
 	}
 
-	if (exists $opts->{d} && !exists $opts->{n}) {
+	if (exists $opts{d} && !exists $opts{n}) {
 	    $o = $r3->to_string("pretty");
 	    $o =~ s/ns0\://g;
 	    print $o."\n";
