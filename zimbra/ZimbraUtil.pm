@@ -2,6 +2,7 @@ package ZimbraUtil;
 # Author: Morgan Jones (morgan@morganjones.org)
 # Id:     $Id$
 #
+# TODO: check where variables are initialized and move to new if appropriate.
 
 use strict;
 use lib "/usr/local/zcs-5.0.2_GA_1975-src/ZimbraServer/src/perl/soap";
@@ -20,14 +21,29 @@ use Net::LDAP;
 my $max_recurse = 5;
 my $debug=0;
 my $printonly=0;
+my $parent_pid;
+my %subset;
+my $ldap;
+my @exclude_list;
 
 # ldap defaults
 my %l_params = (
     l_host => "ldap0.domain.org",
     l_binddn => "cn=directory manager",
-    l_bindpass => "UoTM3rd",
+    l_bindpass => "pass",
     l_base => "dc=domain,dc=org",
+
+    # debugging:
+    # l_filter = 
+    #  "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
+    #    "(orghomeorgcd=9500)";
+    # l_filter = "(orghomeorgcd=9500)";
+    #
+    # production:
+    l_filter => "(objectclass=orgZimbraPerson)"
 );
+
+my $exclude_group_rdn = "cn=orgexcludes";  # assumed to be in $ldap_base
 
 # Zimbra defaults
 my %z_params = (
@@ -47,6 +63,9 @@ my $context;
 $z_params{z_url} = "https://" . $z_params{z_server} . ":7071/service/admin/soap/";
 $z_params{z_archive_domain} = $z_params{z_domain} . "." . "archive";
 
+# general defaults
+my %g_params;
+
 
 # Top level public functions
 #####
@@ -58,7 +77,7 @@ sub return_all_accounts {
 
 #####
 sub rename_all_archives {
-    shift @_;  # get rid of the first argument: the object
+    shift if ((ref $_[0]) eq __PACKAGE__);
 
     return operate_on_user_list(func=>\&ooul_func_rename_archives, @_);
 }
@@ -70,41 +89,57 @@ sub rename_all_archives {
 # Package utility function(s)
 #####
 sub new {
-    my $class = shift;
-    my %args = @_;
+    my $class;
+    my %args;
+    ($class, $parent_pid, %args) = @_;
 
     for my $k (keys %args) {
-        if (exists $z_params{$k}) {
-            $z_params{$k} = $args{$k};
-            next; 
-        } elsif ($k =~ /^z_/) {
-            warn "no default found in ZimbraUtil for named arg $k.  It will be added to \%z_params";
-            $z_params{$k} = $args{$k}; 
-            next; 
-        }
+#         if (exists $z_params{$k}) {
+#             $z_params{$k} = $args{$k};
+#             next; 
+#         } elsif ($k =~ /^z_/) {
+#             warn "no default found in ZimbraUtil for named arg $k.  It will be added to \%z_params";
+#             $z_params{$k} = $args{$k}; 
+#             next; 
+#         }
                 
-        if (exists $l_params{$k}) {
-            $l_params{$k} = $args{$k};
-            next;
-        } elsif ($k =~ /^l_/) {
-            warn "no default found in ZimbraUtil for named arg $k.  It will be added to \%z_params";
-            $l_params{$k} = $args{$k};
-            next;
-        }
+#         if (exists $l_params{$k}) {
+#             $l_params{$k} = $args{$k};
+#             next;
+#         } elsif ($k =~ /^l_/) {
+#             warn "no default found in ZimbraUtil for named arg $k.  It will be added to \%z_params";
+#             $l_params{$k} = $args{$k};
+#             next;
+#         }
        
-        if ($k =~ /^g_/) {
-            $debug = $args{$k}
-                if ($k eq "g_debug");
+#         if ($k =~ /^g_/) {
+#             $debug = $args{$k}
+#                 if ($k eq "g_debug");
+
+#             if ($k eq "g_printonly") {
+#                 $printonly = $args{$k};
+#                 print "printonly invoked, no changes will be made..\n\n";
+#             }
+
+#             next;
+#         }
+
+        if ($k =~ /^z_/) {
+            $z_params{$k} = $args{$k}; 
+        } elsif ($k =~ /^l_/) {
+            $l_params{$k} = $args{$k};
+        } elsif ($k =~ /^g_/) {
+
+            if ($k eq "g_debug") { $debug = 1; }
 
             if ($k eq "g_printonly") {
                 $printonly = $args{$k};
-                print "printonly invoked, no changes will be made..\n\n";
+                print "-n used, no changes will be made..\n";
             }
-
-            next;
+            $g_params{$k} = $args{$k};
+        } else {
+            warn "can't find  matching key for ", __PACKAGE__, " named argument $k.  it will be ignored";
         }
-        
-        warn "can't find  matching key for ZimbraUtil named argument $k.  it will be ignored";
     }
     
 
@@ -129,6 +164,8 @@ sub new {
 # funcs to pass to operate_on_user_list
 #######
 sub ooul_func_return_list($) {
+    shift if ((ref $_[0]) eq __PACKAGE__);
+
     my $r = shift;
 
     my @l;
@@ -153,7 +190,8 @@ sub ooul_func_return_list($) {
 
 #######
 sub ooul_func_rename_archives($) {
-    #my $r = shift;
+    shift if ((ref $_[0]) eq __PACKAGE__);
+
     my ($r, %args) = @_;
 
 
@@ -293,10 +331,108 @@ sub ooul_func_rename_archives($) {
 
 
 
-
+###################
 # Utility functions
 #####
+
+sub get_zimbra_usrs_frm_ldap {
+    shift if ((ref $_[0]) eq __PACKAGE__);
+
+#TODO: unbind ldap
+    my $fil = $l_params{l_filter};
+    $ldap = Net::LDAP->new($l_params{l_host});
+    my $rslt = $ldap->bind($l_params{l_binddn}, password => $l_params{l_bindpass});
+    $rslt->code && die "unable to bind as ", $l_params{binddn}, ": ", $rslt->error;
+
+    if (exists $l_params{l_subset}) {
+        for my $u (split /\s*,\s*/, $l_params{l_subset}) {$subset{lc $u} = 1;}
+        print "\nlimiting to subset of users:\n", join (', ', keys %subset), "\n";
+        $fil = "(&" . $fil . "(|(uid=" . join (')(uid=', keys %subset) . ")))";
+    }
+
+    print "getting user list from ldap: $fil\n";
+
+    $rslt = $ldap->search(base => $l_params{l_base}, filter => $fil);
+    $rslt->code && die "problem with search $fil: ".$rslt->error;
+
+    return $rslt->entries;
+}
+
+######
+sub get_exclude_list() {
+    shift if ((ref $_[0]) eq __PACKAGE__);
+    
+    my $r = $ldap->search(base => $l_params{l_base} , filter => $exclude_group_rdn);
+    $r->code && die "problem retrieving exclude list: " . $r->error;
+
+    my @e = $r->entries;  # do we need to check for multiple entries?
+
+    if ($#e != 0) {
+	print "more than one entry found for $exclude_group_rdn:\n";
+	for my $lu (@e) {
+	    print "dn: ", $lu->dn(), "\n";
+	}
+	die;
+    }
+
+    my $exclude = $e[0];
+
+#    return $exclude->get_value("uniquemember");
+    @exclude_list = $exclude->get_value("uniquemember");
+}
+
+
+######
+# @exclude_list *must* be populated before this is run.
+sub in_exclude_list($) {
+    my $u = shift;
+    
+    for my $ex (@exclude_list) {
+#	unless ($multi_domain_mode) {
+	unless ($g_params{multi_domain_mode}) {
+	    $ex = (split(/\@/, $ex))[0];
+	    $u  = (split(/\@/, $u))[0];
+	}
+	
+	return 1
+	    if (lc($ex) eq lc($u));
+    }
+    
+    return 0;
+}
+
+
+##########
+sub in_multi_domain_mode {
+    shift if ((ref $_[0]) eq __PACKAGE__);
+
+    return 1 if ($g_params{multi_domain_mode});
+    return 0;
+}
+
+
+#########
+sub in_subset {
+    shift if ((ref $_[0]) eq __PACKAGE__);
+
+    my $u = shift;
+
+    my $username;
+    if ($u =~ /@/) {
+        $username = (split /\@/, $u)[0];
+    }
+
+    return 1
+        if (!%subset || ((exists $subset{$u}) ||
+                        (defined $username && exists $subset{$username})));
+
+    return 0;
+}
+
+
 sub operate_on_user_list {
+    shift if ((ref $_[0]) eq __PACKAGE__);
+
     my %args = @_;
 
     exists $args{func} || return undef;
@@ -351,7 +487,8 @@ sub operate_on_user_list {
 # a, aa, aaa, aab, aac ... zzz
 #sub get_list_in_range($$$) {
 sub operate_on_range {
-    #my ($prfx, $beg, $end) = @_;
+    shift if ((ref $_[0]) eq __PACKAGE__);
+
     my ($prfx, $beg, $end, $func, %args) = @_;
 
 #     print "deleting ";
@@ -451,8 +588,37 @@ BEGIN {
 }
 
 
+# ######
+# sub get_zimbra_context {
+
+#     # authenticate to Zimbra admin url
+#     my $d = new XmlDoc;
+#     $d->start('AuthRequest', $ACCTNS);
+#     $d->add('name', undef, undef, "admin");
+#     $d->add('password', undef, undef, $z_params{z_pass});
+#     $d->end();
+
+#     # get back an authResponse, authToken, sessionId & context.
+#     my $authResponse = $SOAP->invoke($z_params{z_url}, $d->root());
+
+#     my $authToken = $authResponse->find_child('authToken')->content;
+#     # this needs to global to allow delegated auth to work..
+#     $sessionId = $authResponse->find_child('sessionId')->content;
+
+#     return $SOAP->zimbraContext($authToken, $sessionId);
+# }
+
+
+sub return_one {
+    return 1;
+}
+
+
 ######
 sub get_zimbra_context {
+    shift if ((ref $_[0]) eq __PACKAGE__);
+
+    my $delegate_to=shift;
 
     # authenticate to Zimbra admin url
     my $d = new XmlDoc;
@@ -462,26 +628,64 @@ sub get_zimbra_context {
     $d->end();
 
     # get back an authResponse, authToken, sessionId & context.
-    my $authResponse = $SOAP->invoke($z_params{z_url}, $d->root());
+    my $r = $SOAP->invoke($z_params{z_url}, $d->root());
 
-    my $authToken = $authResponse->find_child('authToken')->content;
-    # this needs to global to allow delegated auth to work..
-    $sessionId = $authResponse->find_child('sessionId')->content;
+    # if we get a fault here there is not much that can be done.
+    return undef
+        if ($r->name eq "Fault");
 
-    return $SOAP->zimbraContext($authToken, $sessionId);
+
+    my $authToken = $r->find_child('authToken')->content;
+    $sessionId = $r->find_child('sessionId')->content;
+
+    # return $SOAP->zimbraContext($authToken, $sessionId);
+
+    my $cntxt = $SOAP->zimbraContext($authToken, $sessionId);
+
+    if (defined($delegate_to)) {
+        $d = new XmlDoc;
+
+        $d->start('DelegateAuthRequest', $MAILNS);
+        $d->add('account', $MAILNS, { by => "name" }, 
+              $delegate_to);
+        $d->end();
+
+        $r = $SOAP->invoke($z_params{z_url}, $d->root());
+
+
+        # if we get a fault here there is not much that can be done.
+        return undef
+            if ($r->name eq "Fault");
+
+        $authToken = $r->find_child('authToken')->content;
+        $sessionId = $r->find_child('sessionId')->content;
+        
+        my $new_cntxt = $SOAP->zimbraContext($authToken, $sessionId);
+
+        # only print if debug?
+        #print "returning new_cntxt because delegate_to is $delegate_to\n";
+
+        return $new_cntxt;
+    }
+
+    return $cntxt;
 }
+
 
 
 
 ######
 # for compatibility
 sub get_archive_account_id($) {
+    shift if ((ref $_[0]) eq __PACKAGE__);
+
     return get_account_id(@_);
 }
 
 
 ######
 sub get_account_id($) {
+    shift if ((ref $_[0]) eq __PACKAGE__);
     my $a = shift;
 
     my $d2 = new XmlDoc;
@@ -514,7 +718,13 @@ sub get_account_id($) {
 #  The idea is to catch an expired auth token on the fly so as to not 
 #  interrupt the running script.
 sub check_context_invoke {
-    my ($d, $context_ref, $parent_pid) = @_;
+    shift if ((ref $_[0]) eq __PACKAGE__);
+    my ($d, $context_ref, $delegate_to) = @_;
+    
+    if ((ref $d) ne "XmlDoc") {
+        shift; 
+        ($d, $context_ref) = @_;
+    }
 
     my $r = $SOAP->invoke($z_params{z_url}, $d->root(), $$context_ref);
 
@@ -524,7 +734,18 @@ sub check_context_invoke {
 	    # authentication timed out, re-authenticate and re-try the invoke
 	    print "\tfault due to $rsn at ", `date`;
 	    print "\tre-authenticating..\n";
-	    $$context_ref = get_zimbra_context();
+	    $$context_ref = get_zimbra_context($delegate_to);
+
+            if (!defined $$context_ref) {
+                # if we can't get a valid context but are delegating it is likely 
+                #   just a problem with that user, ie maintenance mode..  Return undef 
+                #   and let the caller figure out what to do.
+
+                return undef
+                    if (defined $delegate_to);
+                die "unable to get a valid context";
+            }
+
 	    $r = $SOAP->invoke($z_params{z_url}, $d->root(), $$context_ref);
 
             if (defined ($parent_pid)) {
@@ -535,16 +756,14 @@ sub check_context_invoke {
             }
 	    if ($r->name eq "Fault") {
 		$rsn = get_fault_reason($r);
-		if (defined $rsn && $rsn =~ /AUTH_EXPIRED/) {
-		    print "got $rsn *again* ... ".
-			"this shouldn't happen, exiting.\n";
-		    print Dumper($r);
-		    exit;
-		} else {
-		    # we got a fault of some other sort, return to the
-		    # caller to handle the fault
-		    return $r;
-		}
+
+                print "got a second fault in check_context_invoke.\n";
+		if (defined $rsn) {
+                    print "\treason: $rsn.\n";
+                }
+                print "exiting..";
+                print Dumper($r);
+                exit;
 	    }
 	}
     }
@@ -554,6 +773,8 @@ sub check_context_invoke {
 
 ######
 sub get_fault_reason {
+    shift if ((ref $_[0]) eq __PACKAGE__);
+
     my $r = shift;
 
     # get the reason for the fault
@@ -569,9 +790,5 @@ sub get_fault_reason {
 
     return "<no reason found..>";
 }
-
-
-
-
 
 1;
