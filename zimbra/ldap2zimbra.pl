@@ -87,7 +87,7 @@ my $archive_mailhost = "dmail02.domain.org";
 # TODO: look up cos by name instead of requiring the user enter the cos id.
 # prod:
 #my $archive_cos_id = "249ef618-29d0-465e-86ae-3eb407b65540";
-# dev:
+#dev:
 my $archive_cos_id = "c0806006-9813-4ff2-b0a9-667035376ece";
 
 # Global Calendar settings.  ldap2zimbra can a calendar shares
@@ -108,28 +108,8 @@ my $child_status_path=$script_dir . "/child_status";
 
 die "can't write to child status directory: $child_status_path" if (! -w $child_status_path);
 
-
-# default ldap settings, can be overridden on the command line
-# my $default_ldap_host    = "ldap0.domain.org";
-# my $default_ldap_base    = "dc=domain,dc=org";
-# my $default_ldap_bind_dn = "cn=Directory Manager";
-# my $default_ldap_pass    = "pass";
-
-
-
-# good for testing/debugging:
-#my $default_ldap_filter = 
-#  "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
-#    "(orghomeorgcd=9500)";
-# my $default_ldap_filter = "(orghomeorgcd=9500)";
-#
-# production:
-#my $default_ldap_filter = "(objectclass=orgZimbraPerson)";
-
 #### End Site-specific settings
 #############################################################
-
-
 
 
 use strict;
@@ -151,25 +131,16 @@ sub delete_not_in_ldap();
 sub delete_in_range($$$);
 sub parse_and_del($);
 sub renew_context();
-# sub in_exclude_list($);
-# sub get_exclude_list();
 sub build_archive_account($);
 sub cal_exists(@);
 sub check_for_global_cals();
 sub prime_cal_cache($);
 
-
-#my $opts;
 my %opts;
 my %arg_h;
-# getopts('hl:D:w:b:em:ndz:s:p:a', \%$opts);
 getopts('hl:D:w:b:em:ndz:s:p:ar', \%opts);
 
 $opts{h}                     && print_usage();
-# my $ldap_host = $opts{l}     || $default_ldap_host;
-# my $ldap_base = $opts{b}     || $default_ldap_base;
-# my $binddn =    $opts{D}     || $default_ldap_bind_dn;
-# my $bindpass =  $opts{w}     || $default_ldap_pass;
 my $zimbra_svr = $opts{z}    || $default_zimbra_svr;
 my $zimbra_domain = $opts{m} || $default_domain;
 my $zimbra_pass = $opts{p}   || $default_zimbra_pass;
@@ -197,14 +168,15 @@ for my $k (keys %opts) {
     elsif ($k eq "z")   { $arg_h{z_server}    = $opts{z}; }
     elsif ($k eq "m")   { $arg_h{z_domain}    = $opts{m}; }
     elsif ($k eq "p")   { $arg_h{z_pass}      = $opts{p}; }
-    elsif ($k eq "e")   { print "extensive (-e) option not yet implemented\n"; }
+    elsif ($k eq "e")   { #do nothing at the moment.
+                          }
     elsif ($k eq "n")   { $arg_h{g_printonly} = 1; }
     elsif ($k eq "d")   { $arg_h{g_debug}     = 1; }
     elsif ($k eq "p")   { $arg_h{g_multi_domain} = 1; }
     elsif ($k eq "s")   { $arg_h{l_subset}    = $opts{s}; }
     elsif ($k eq "h")   { print_usage(); }
-#    else                { print "unimplemented option: -${k}:"; 
-#                          print_usage(); }
+    else                { print "unimplemented option: -${k}:"; 
+                          print_usage(); }
 }
 
 
@@ -237,11 +209,6 @@ print "-r used, archives will not be deleted\n"
 ### keep track of accounts in ldap and added.
 ### search out every account in ldap.
 
-
-
-#my @exclude_list = get_exclude_list();
-
-
 my $context = $zu->get_zimbra_context();
 
 if (!defined $context) {
@@ -252,28 +219,9 @@ check_for_global_cals();
 
 print "\nstarting at ", `date`;
 
-# # bind to ldap
-# my $ldap = Net::LDAP->new($ldap_host);
-# my $rslt = $ldap->bind($binddn, password => $bindpass);
-# $rslt->code && die "unable to bind as ", $binddn, ": ", $rslt->error;
-
-# if (defined $subset_str) {
-#     for my $u (split /\s*,\s*/, $subset_str) {$subset->{lc $u} = 0;}
-#     print "\nlimiting to subset of users:\n", join (', ', keys %$subset), "\n";
-#     $fil = "(&" . $fil . "(|(uid=" . join (')(uid=', keys %$subset) . ")))";
-# }
-
-# print "getting user list from ldap: $fil\n";
-
-# $rslt = $ldap->search(base => "$ldap_base", filter => $fil);
-# $rslt->code && die "problem with search $fil: ".$rslt->error;
-
-# my @ldap_entries = $rslt->entries;
-
 my @ldap_entries = $zu->get_zimbra_usrs_frm_ldap();
 $zu->get_exclude_list();
 
-# increment through users returned from ldap
 print "\nadd/modify phase..", `date`;
 
 my $pids;  # keep track of PIDs as child processes run
@@ -291,12 +239,11 @@ for my $lusr (@ldap_entries) {
 
     $users_left--;
 
-#     if ($multi_domain_mode) {
     if ($zu->in_multi_domain_mode()) {
   	$usr = lc $lusr->get_value("mail");
-     } else {
+    } else {
   	$usr = lc $lusr->get_value("uid") . "@" . $default_domain
-     }
+    }
 
     # if $usr is undefined or empty there is likely no mail attribute: 
     # get the uid attribute and concatenate the default domain
@@ -309,22 +256,13 @@ for my $lusr (@ldap_entries) {
 
     # skip user if a subset was defined on the command line and this
     # user is not part of it.
-#    if (defined $subset_str) {
-#    if (exists $arg_h{l_subset})
-#  	my $username = (split /\@/, $usr)[0];
-
-#  	next unless (exists ($subset->{$username}) ||
-#  		     exists ($subset->{$usr}));
-
+    # if no subset is defined this sub is a noop.
     next unless ($zu->in_subset($usr));
-
-#    }
 
     # skip users in ldap exclude list
     #   TODO: describe format of exclude list above
     #     should there be an option to skip checking for the exclude
     #     list?
-
     
     if ($zu->in_exclude_list($usr)) {
    	print "skipping special user $usr\n"
@@ -483,6 +421,7 @@ if (exists $opts{a}) {
 ### get a list of zimbra accounts, compare to ldap accounts, delete
 ### zimbra accounts no longer in LDAP.
 
+# TODO: unbind in ZimbraUtil.
 #$rslt = $ldap->unbind;
 print "\nfinished at ";
 print `date`;
@@ -690,7 +629,6 @@ sub add_user($) {
               }
 
               if ($r->name eq "Fault") {
-#                  my $rsn = get_fault_reason($r);
                   my $rsn = $zu->get_fault_reason($r);
 	      
                   if ($rsn eq "mail.NO_SUCH_FOLDER") { 
@@ -745,11 +683,9 @@ sub get_archive_account_id($) {
     $d2->add('account', $MAILNS, { "by" => "name" }, $a);
     $d2->end();
     
-#    my $r2 = check_context_invoke($d2, \$context);
     my $r2 = $zu->check_context_invoke($d2, \$context);
 
     if ($r2->name eq "Fault") {
-#	my $rsn = get_fault_reason($r2);
         my $rsn = $zu->get_fault_reason($r2);
 	if ($rsn ne "account.NO_SUCH_ACCOUNT") {
 	    print "problem searching out archive $a\n";
@@ -784,7 +720,6 @@ sub sync_user($$) {
 	    add_archive_acct($lu);
 	}
     } else {
-	#$all_users->{$archive_acct_name} = 1;
 	print "writing existing archive to parent ($$): $archive_acct_name\n"
 	    if (exists $opts{d});
 	print CHILD_WTR "$archive_acct_name\n";
@@ -1069,7 +1004,6 @@ sub build_phone_fax($) {
 sub build_address($) {
     my $lu = shift;
 
-    #return $lu->get_value("orgworkstreetshort");
     return fix_case($lu->get_value("orgworkstreetshort"));
 }
 
@@ -1144,7 +1078,6 @@ sub get_z_user($) {
     }
 
     my $middle_child = $r->find_child('account');
-     #my $delivery_addr_element = $resp->find_child('zimbraMailDeliveryAddress');
 
     # user entries return a list of XmlElements
     return undef if !defined $middle_child;
@@ -1153,8 +1086,6 @@ sub get_z_user($) {
 	#     it but I don't think it will ever happen.
 	push @{$ret->{lc ((values %{$child->attrs()})[0])}}, $child->content();
      }
-
-     #my $acct_info = $response->find_child('account');
 
     return $ret;
 }
@@ -1192,9 +1123,7 @@ sub fix_case($) {
 	#   we specifically use parenthesis and asterisks in the cn
 	$s1 =~ s/([\*\(\)]{1})/\\$1/g;
 
-	#$work =~ s/$`$&//;
 	$work =~ s/$s1//;
-
     }
     $s .= $work;
 
@@ -1215,8 +1144,6 @@ sub fix_case($) {
 
 	$s = join (' ', map ({ 
  	    if (lc $_ =~ /^$cl2([a-z]{1})/i) {
-
-		
 		my $pre =   ucfirst (lc $cl2);
 		my $thing = uc $1;
 		my $rest =  $_;
@@ -1361,7 +1288,6 @@ sub delete_in_range($$$) {
             $d->add('query', $MAILNS, undef, $fil);
             $d->end;
 
-#            my $r = check_context_invoke($d, \$context);
 	    my $r = $zu->check_context_invoke($d, \$context);
 
             if ($r->name eq "Fault") {
@@ -1388,7 +1314,6 @@ sub delete_in_range($$$) {
 
             }
         }
-
 
         if ($beg =~ /[a-zA-Z]+/i && $end =~ /[0-9]+/) {
             $beg = 0;
@@ -1458,12 +1383,6 @@ sub parse_and_del($) {
                 next;
             }
 
-# 	    if (defined $subset_str) {
-# 		next unless (exists($subset->{$uid}) || 
-# 			     exists($subset->{$mail}));
-# 	    }
-
-
             next unless ($zu->in_subset($uid) || 
                          $zu->in_subset($mail));
 
@@ -1530,7 +1449,6 @@ sub add_archive_acct {
     }
 
     if (!exists $opts{n}) {
-#	my $r3 = $zu->check_context_invoke($d3, \$context, $parent_pid);
 	my $r3 = $zu->check_context_invoke($d3, \$context);
 
 	if ($r3->name eq "Fault") {
@@ -1564,16 +1482,6 @@ sub cal_exists(@) {
     if (!defined $acct or !defined $cal) {
         die "cal_exists needs account and calendar name";
     }
-
-    # if $owner is defined we are looking for a share of $cal from $owner.
-    # if $owner is not defined we are looking for a local calendar named $cal.
-
-    # if (!defined $owner) {
-    #     print " and $cal";
-    # } else {
-    #     print ", $cal and $owner";
-    # }
-    # print "\n";
 
     prime_cal_cache($acct);
 
@@ -1626,7 +1534,6 @@ sub cal_exists(@) {
         }
     }
     
-    # print "\t$cal not in or shared to $acct.\n";
     return 0; # cal was not found.
 }
 
@@ -1694,7 +1601,6 @@ sub prime_cal_cache($) {
     $d->add('account', $MAILNS, { by => "name" }, $acct);
     $d->end();
 
-#    my $r = check_context_invoke($d, \$context, $acct);
     my $r = $zu->check_context_invoke($d, \$context, $acct);
 
     # no need to do anything if a context can't be obtained.. the cache just won't be populated.
@@ -1724,11 +1630,9 @@ sub prime_cal_cache($) {
     $r = $SOAP->invoke($url, $d->root(), $new_context);
 
     my $mc = (@{$r->children()})[0];
-#    my $ret = 0;
 
     for my $c (@{$mc->children()}) {
         if (exists $c->attrs->{view} && $c->attrs->{view} eq "appointment") {
-#            print "caching $acct calendar ", $c->attrs->{name}, "\n";
                     
             if (defined $c->attrs->{rid}) {
                 push @{$cached_cals{$acct}}, {name => $c->attrs->{name},
@@ -1739,8 +1643,6 @@ sub prime_cal_cache($) {
                 push @{$cached_cals{$acct}}, {name => $c->attrs->{name},
                                               id => $c->attrs->{id}};
             }
-
-#           print "comparing $cal and ", $c->attrs->{name}, "\n";
         }
     }
 }
@@ -1760,7 +1662,6 @@ sub delete_cal {
     $d->add('account', $MAILNS, { by => "name" }, $acct);
     $d->end();
 
-#    my $r = check_context_invoke($d, \$context, $acct);
     my $r = $zu->check_context_invoke($d, \$context, $acct);
 
     return undef
@@ -1797,7 +1698,6 @@ sub check_for_global_cals() {
 
     for my $c (@global_cals) {
         $c->{exists} = cal_exists($c->{owner}, $c->{name});
-#        print "exists set to ", $c->{exists}, "\n";
     }
 
 }

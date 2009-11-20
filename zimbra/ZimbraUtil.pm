@@ -51,7 +51,13 @@ my %z_params = (
     z_pass => "pass",
     z_domain => "dev.domain.org",  # mail domain
     z_archive_mailhost => "dmail02.domain.org",
-    z_archive_suffix => "archive"
+    z_archive_suffix => "archive",
+    z_domain => "dev.domain.org",
+    z_archive_mailhost => "dmail02.domain.org",
+    # production:
+    # z_archive_cos_id => "249ef618-29d0-465e-86ae-3eb407b65540",
+    # dev:
+    z_archive_cos_id => "c0806006-9813-4ff2-b0a9-667035376ece",
 );
 my $zimbra_limit_filter = "(objectclass=orgzimbraperson)";
 my $ACCTNS = "urn:zimbraAdmin";
@@ -94,36 +100,6 @@ sub new {
     ($class, $parent_pid, %args) = @_;
 
     for my $k (keys %args) {
-#         if (exists $z_params{$k}) {
-#             $z_params{$k} = $args{$k};
-#             next; 
-#         } elsif ($k =~ /^z_/) {
-#             warn "no default found in ZimbraUtil for named arg $k.  It will be added to \%z_params";
-#             $z_params{$k} = $args{$k}; 
-#             next; 
-#         }
-                
-#         if (exists $l_params{$k}) {
-#             $l_params{$k} = $args{$k};
-#             next;
-#         } elsif ($k =~ /^l_/) {
-#             warn "no default found in ZimbraUtil for named arg $k.  It will be added to \%z_params";
-#             $l_params{$k} = $args{$k};
-#             next;
-#         }
-       
-#         if ($k =~ /^g_/) {
-#             $debug = $args{$k}
-#                 if ($k eq "g_debug");
-
-#             if ($k eq "g_printonly") {
-#                 $printonly = $args{$k};
-#                 print "printonly invoked, no changes will be made..\n\n";
-#             }
-
-#             next;
-#         }
-
         if ($k =~ /^z_/) {
             $z_params{$k} = $args{$k}; 
         } elsif ($k =~ /^l_/) {
@@ -491,6 +467,7 @@ sub operate_on_range {
 
     my ($prfx, $beg, $end, $func, %args) = @_;
 
+# TODO: if debug:
 #     print "deleting ";
 #     print "${beg}..${end} ";
 #     print "w/ prfx $prfx " if (defined $prfx);
@@ -522,11 +499,8 @@ sub operate_on_range {
 	
 	#my $r = $SOAP->invoke($url, $d->root(), $context);
         my $r = check_context_invoke($d, \$context);
-# debugging:
-# 	if ($r->name eq "Fault" || !defined $prfx || 
-#	    scalar (split //, $prfx) < 6 ) {
+
  	if ($r->name eq "Fault") {
-	   
 	    my $rsn = get_fault_reason ($r);
 
 	    # break down the search by alpha/numeric if reason is 
@@ -560,7 +534,6 @@ sub operate_on_range {
 	    }
 
  	} else {
-	    # push @l, parse_and_return_list($r);
 	    push @l, $func->($r, %args);
         }
     }
@@ -588,32 +561,6 @@ BEGIN {
 }
 
 
-# ######
-# sub get_zimbra_context {
-
-#     # authenticate to Zimbra admin url
-#     my $d = new XmlDoc;
-#     $d->start('AuthRequest', $ACCTNS);
-#     $d->add('name', undef, undef, "admin");
-#     $d->add('password', undef, undef, $z_params{z_pass});
-#     $d->end();
-
-#     # get back an authResponse, authToken, sessionId & context.
-#     my $authResponse = $SOAP->invoke($z_params{z_url}, $d->root());
-
-#     my $authToken = $authResponse->find_child('authToken')->content;
-#     # this needs to global to allow delegated auth to work..
-#     $sessionId = $authResponse->find_child('sessionId')->content;
-
-#     return $SOAP->zimbraContext($authToken, $sessionId);
-# }
-
-
-sub return_one {
-    return 1;
-}
-
-
 ######
 sub get_zimbra_context {
     shift if ((ref $_[0]) eq __PACKAGE__);
@@ -638,8 +585,6 @@ sub get_zimbra_context {
     my $authToken = $r->find_child('authToken')->content;
     $sessionId = $r->find_child('sessionId')->content;
 
-    # return $SOAP->zimbraContext($authToken, $sessionId);
-
     my $cntxt = $SOAP->zimbraContext($authToken, $sessionId);
 
     if (defined($delegate_to)) {
@@ -662,7 +607,7 @@ sub get_zimbra_context {
         
         my $new_cntxt = $SOAP->zimbraContext($authToken, $sessionId);
 
-        # only print if debug?
+        #TODO:  only print if debug?
         #print "returning new_cntxt because delegate_to is $delegate_to\n";
 
         return $new_cntxt;
