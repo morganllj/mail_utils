@@ -3,6 +3,8 @@ package ZimbraUtil;
 # Id:     $Id$
 #
 # TODO: check where variables are initialized and move to new if appropriate.
+#       generalize build_zmailhost()
+#       unbind ldap explicitely
 
 use strict;
 use lib "/usr/local/zcs-5.0.2_GA_1975-src/ZimbraServer/src/perl/soap";
@@ -11,7 +13,6 @@ use XmlDoc;
 use Soap;
 use Data::Dumper;
 use Net::LDAP;
-
 
 # Defaults
 # max delete recurse depth -- how deep should we go before giving up
@@ -43,13 +44,11 @@ my %l_params = (
     l_binddn => "cn=directory manager",
     l_bindpass => "pass",
     l_base => "dc=domain,dc=org",
-
     # debugging:
     # l_filter = 
     #  "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
     #    "(orghomeorgcd=9500)";
     # l_filter = "(orghomeorgcd=9500)";
-    #
     # production:
     l_filter => "(objectclass=orgZimbraPerson)"
 );
@@ -81,16 +80,17 @@ my $context;
 # Global Calendar settings.  ldap2zimbra can a calendar shares
 # to every user.
 my @global_cals = (
-    { owner => "calendar-admin\@" . get_z_domain(),
-      name  => "Academic Calendar",
-      path  => "/Academic Calendar",
+    { owner => "calendar-admin\@" . get_default_domain(),
+      name  => "~Academic Calendar",
+      path  => "/~Academic Calendar",
       exists => 0 },
-
-    { owner => "calendar-pd\@" . get_z_domain(),
-      name  => "PDPlanner",
-      path => "/PDPlanner",
-      exists => 0 }
+# we're still waiting for approval on this:
+#    { owner => "calendar-pd\@" . $default_domain,
+#      name  => "~PDPlanner",
+#      path => "/~PDPlanner",
+#      exists => 0 }
 );
+
 
 $z_params{z_url} = "https://" . $z_params{z_server} . ":7071/service/admin/soap/";
 $z_params{z_archive_domain} = $z_params{z_domain} . "." . "archive";
@@ -105,7 +105,7 @@ sub return_all_accounts {
     shift if ((ref $_[0]) eq __PACKAGE__);
 
     return operate_on_user_list(func=>\&ooul_func_return_list, 
-                                filter=>"(|(uid=j*)(uid=k*))");
+                                filter=>"(objectclass=orgzimbraperson)");
 }
 
 
@@ -115,9 +115,6 @@ sub rename_all_archives {
 
     return operate_on_user_list(func=>\&ooul_func_rename_archives, @_);
 }
-
-
-
 
 
 # Package utility function(s)
@@ -207,13 +204,7 @@ sub ooul_func_return_list($) {
 #######
 sub ooul_func_rename_archives($) {
     shift if ((ref $_[0]) eq __PACKAGE__);
-
     my ($r, %args) = @_;
-
-#     # bind to ldap
-#     my $ldap = Net::LDAP->new($l_params{l_host});
-#     my $rslt = $ldap->bind($l_params{l_binddn}, password => $l_params{l_bindpass});
-#     $rslt->code && die "unable to bind as ", $l_params{l_binddn}, ": ", $rslt->error;
 
     my @l;
 
@@ -265,14 +256,12 @@ sub ooul_func_rename_archives($) {
             die "no attribute received in ooul_func_rename_archives";
         }
         
-
         if (defined($amavis_to) && defined($archive) && $amavis_to ne $archive) {
             print "\nwarning, amavisarchivequarantineto and zimbraarchiveaccount ".
                 "don't match for $uid:\n";
             print $amavis_to . " vs. ". $archive. "\n";
             #TODO: do something?
         }
-        
         
         if (!defined $archive) {
             print "no zimbraArchiveAccount for $uid, no action taken.\n";
@@ -347,15 +336,13 @@ sub ooul_func_rename_archives($) {
 
 
 ###################
-# Utility functions
+# General utility functions
 #####
 
 sub get_zimbra_usrs_frm_ldap {
     shift if ((ref $_[0]) eq __PACKAGE__);
 
-#TODO: unbind ldap
     my $fil = $l_params{l_filter};
-
 
     if (exists $l_params{l_subset}) {
         for my $u (split /\s*,\s*/, $l_params{l_subset}) {$subset{lc $u} = 1;}
@@ -370,6 +357,7 @@ sub get_zimbra_usrs_frm_ldap {
 
     return $rslt->entries;
 }
+
 
 ######
 sub get_exclude_list() {
@@ -640,7 +628,6 @@ sub add_user {
 		my $mc = $r2->find_child('account');
 
 		if (defined $mc) {
-		    #return ($mc->attrs->{name}, $mc->attrs->{id});
 		    $archive_cache->{(@{$zuser->{mail}})[0]} = 
 			$mc->attrs->{name};
 		    return ($mc->attrs->{name});
@@ -821,7 +808,6 @@ sub operate_on_range {
 #     print "${beg}..${end} ";
 #     print "w/ prfx $prfx " if (defined $prfx);
 #     print "\n";
-
     
     my $search_fil;
     
@@ -1249,9 +1235,7 @@ sub delete_in_range {
                 return if ($rc); # should cause us to drop back one level
                 # in recursion
             } else {
-
                 parse_and_del($r);
-
             }
         }
 
@@ -1277,15 +1261,18 @@ sub parse_and_del($) {
     my $r = shift;
 
     for my $child (@{$r->children()}) {
-	my ($uid, $mail, $z_id);
+	my ($uid, $z_id);
+        my @mail;
 
 	for my $attr (@{$child->children}) {
-
 	    $uid = $attr->content()
 		if ((values %{$attr->attrs()})[0] eq "uid");
 
-	    $mail = $attr->content()
-		if ((values %{$attr->attrs()})[0] eq "mail");
+# 	    $mail = $attr->content()
+# 		if ((values %{$attr->attrs()})[0] eq "mail");
+
+            push @mail, $attr->content()
+                if ((values %{$attr->attrs()})[0] eq "mail");
 
 	    $z_id = $attr->content()
 		if ((values %{$attr->attrs()})[0] eq "zimbraId");
@@ -1298,6 +1285,18 @@ sub parse_and_del($) {
 	    next;
 	}
 
+        # If there are multiple mail attributes all but one are
+        # aliases.  Get the mail attribute that correlates to the uid.
+        my $mail;
+        for my $m (@mail) {
+            my $work_m = (split /@/, $m)[0];
+            $mail = $m
+                if ($uid eq $work_m);
+        }
+
+#         print "selected $mail from ", join ' ', @mail, "\n"
+#             if ($#mail > 0);
+
  	if (defined $mail && defined $z_id && 
 	    !exists $all_users->{$mail}) {
 
@@ -1309,7 +1308,9 @@ sub parse_and_del($) {
             next unless (in_subset($uid) || 
                          in_subset($mail));
 
-	    print "deleting $mail..\n";
+                        
+            print "\@mail: ", join ' ', @mail, "\n";
+	    print "deleting $mail..$uid\n";
 
  	    my $d = new XmlDoc;
  	    $d->start('DeleteAccountRequest', $MAILNS);
@@ -1641,12 +1642,21 @@ sub delete_not_in_ldap() {
 
     my $r;
     my $d = new XmlDoc;
-    $d->start('SearchDirectoryRequest', $MAILNS,
-	      {'sortBy' => "uid",
-	       'attrs'  => "uid",
-	       'types'  => "accounts"}
-	); 
-    { $d->add('query', $MAILNS, { "types" => "accounts" });} 
+
+
+
+     $d->start('SearchDirectoryRequest', $MAILNS,
+#          {'sortBy' => "uid", 'attrs'  => "uid", 'types'  => "accounts"});
+          {'types'  => "accounts"});
+    if (exists $l_params{l_subset}) {
+#        my $fil = "(|(uid=" . join (')(uid=', keys %subset) . "))";
+        my $fil = "(|(uid=m*)(uid=" . join (')(uid=', keys %subset) . "))";
+        print "using subset filter: $fil\n";
+
+        $d->add('query', $MAILNS, { "types" => "accounts" }, $fil);
+    } else {
+        $d->add('query', $MAILNS, { "types" => "accounts" });
+    }
     $d->end();
 
     $r = check_context_invoke($d, \$context);
@@ -1670,9 +1680,9 @@ sub delete_not_in_ldap() {
 	    $r->name, "\n";
 	    return;
 	}
-
-	parse_and_del($r);
     }
+
+    parse_and_del($r);
 }
 
 
@@ -1756,9 +1766,6 @@ sub renew_context () {
       }
       
       my $new_auth_token = $r->find_child('authToken')->content;
-
-      # assumes get_zimbra_context has been called to populate
-      # $sessionId already.  I think that is a safe assumption
       my $new_context = $SOAP->zimbraContext($new_auth_token, $sessionId);
 
       # Compare user calendars with defined calendars
@@ -1868,7 +1875,7 @@ sub cal_exists(@) {
 
         # check for a conflicting named calendar in $acct:
         for my $c (@{$cached_cals{$acct}}) {
-            if ($c->{name} eq $cal) {
+            if (lc $c->{name} eq lc $cal) {
                 # print "conflicting cal named $cal found in $acct.\n";
                 return 1;
             }
@@ -2051,3 +2058,204 @@ sub check_for_global_cals() {
 
 
 1;
+
+
+
+
+# ModifyAccount example:
+#
+# <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+#     <soap:Header>
+#         <context xmlns="urn:zimbra">
+#             <userAgent name="ZimbraWebClient - FF2.0 (Linux)"/>
+#             <sessionId id="3106"/>
+#             <authToken>
+#                 0_b70de391fdcdf4b0178bd2ea98508fee7ad8f422_69643d33363a61383836393466312d656131662d346462372d613038612d3939313766383737313532623b6578703d31333a313139363333333131363139373b61646d696e3d313a313b747970653d363a7a696d6272613b
+#             </authToken>
+#             <format type="js"/>
+#         </context>
+#     </soap:Header>
+#     <soap:Body>
+#         <ModifyAccountRequest xmlns="urn:zimbraAdmin">
+#             <id>
+#                 a95351c1-7590-46e2-9532-de20f2c5a046
+#             </id>
+#             <a n="displayName">
+#                 morgan jones (director of funny walks)
+#             </a>
+#         </ModifyAccountRequest>
+#     </soap:Body>
+# </soap:Envelope>
+
+
+
+# CreateAccount example:
+#
+# <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+#     <soap:Header>
+#         <context xmlns="urn:zimbra">
+#             <userAgent name="ZimbraWebClient - FF2.0 (Linux)"/>
+#             <sessionId id="331"/>
+#             <authToken>
+#                 0_d34449e3f2af2cd49b7ece9fb6dd1e2153cc55b8_69643d33363a61383836393466312d656131662d346462372d613038612d3939313766383737313532623b6578703d31333a313139363232333436303236343b61646d696e3d313a313b747970653d363a7a696d6272613b
+#             </authToken>
+#             <format type="js"/>
+#         </context>
+#     </soap:Header>
+#     <soap:Body>
+#         <CreateAccountRequest xmlns="urn:zimbraAdmin">
+#             <name>
+#                 morgan03@dmail02.domain.org
+#             </name>
+#             <a n="zimbraAccountStatus">
+#                 active
+#             </a>
+#             <a n="displayName">
+#                 morgan jones
+#             </a>
+#             <a n="givenName">
+#                 morgan
+#             </a>$
+#             <a n="sn">
+#                 jones
+#             </a>
+#         </CreateAccountRequest>
+#     </soap:Body>
+# </soap:Envelope>
+
+
+
+# GetAccount example:
+#
+# <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+#     <soap:Header>
+#         <context xmlns="urn:zimbra">
+#             <userAgent name="ZimbraWebClient - FF2.0 (Linux)"/>
+#             <sessionId id="325"/>
+#             <authToken>
+#                 0_d34449e3f2af2cd49b7ece9fb6dd1e2153cc55b8_69643d33363a61383836393466312d656131662d346462372d613038612d3939313766383737313532623b6578703d31333a313139363232333436303236343b61646d696e3d313a313b747970653d363a7a696d6272613b
+#             </authToken>
+#             <format type="js"/>
+#         </context>
+#     </soap:Header>
+#     <soap:Body>
+#         <GetAccountRequest xmlns="urn:zimbraAdmin" applyCos="0">
+#             <account by="id">
+#                 74faaafb-13db-40e4-bd0f-576069035521
+#             </account>
+#         </GetAccountRequest>
+#     </soap:Body>
+# </soap:Envelope>
+
+
+
+# SearchDirectoryRequest for all users:
+#
+# <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+#     <soap:Header>
+#         <context xmlns="urn:zimbra">
+#             <userAgent name="ZimbraWebClient - FF2.0 (Linux)"/>
+#             <sessionId id="3481"/>
+#             <authToken>
+#                 0_8b41a60cf6a7dc8cb7c7e00fc66f939ce66cad5f_69643d33363a38373834623434372d346562332d343934342d626230662d6362373734303061303466653b6578703d31333a313139383930323638303831343b61646d696e3d313a313b747970653d363a7a696d6272613b
+#             </authToken>
+#             <format type="js"/>
+#         </context>
+#     </soap:Header>
+#     <soap:Body>
+#         <SearchDirectoryRequest xmlns="urn:zimbraAdmin" offset="0" limit="25" sortBy="name" sortAscending="1" attrs="displayName,zimbraId,zimbraMailHost,uid,zimbraAccountStatus,zimbraLastLogonTimestamp,description,zimbraMailStatus,zimbraCalResType,zimbraDomainType,zimbraDomainName" types="accounts">
+#             <query/>
+#         </SearchDirectoryRequest>
+#     </soap:Body>
+# </soap:Envelope>
+#
+#
+# search directory request for a pattern:
+# <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+#     <soap:Header>
+#         <context xmlns="urn:zimbra">
+#             <userAgent name="ZimbraWebClient - FF2.0 (Linux)" version="undefined"/>
+#             <sessionId id="277"/>
+#             <authToken>
+#                 0_93974500ed275ab35612e0a73d159fa8ba460f2a_69643d33363a30616261316231362d383364352d346663302d613432372d6130313737386164653032643b6578703d31333a313230363539303038353132383b61646d696e3d313a313b
+#             </authToken>
+#             <format type="js"/>
+#         </context>
+#     </soap:Header>
+#     <soap:Body>
+#         <SearchDirectoryRequest xmlns="urn:zimbraAdmin" offset="0" limit="25" sortBy="name" sortAscending="1" attrs="displayName,zimbraId,zimbraMailHost,uid,zimbraAccountStatus,description,zimbraMailStatus,zimbraCalResType,zimbraDomainType,zimbraDomainName" types="accounts">
+#             <query>
+#                 (|(uid=*morgan*)(cn=*morgan*)(sn=*morgan*)(gn=*morgan*)(displayName=*morgan*)(zimbraId=morgan)(mail=*morgan*)(zimbraMailAlias=*morgan*)(zimbraMailDeliveryAddress=*morgan*)(zimbraDomainName=*morgan*))
+#             </query>
+#         </SearchDirectoryRequest>
+#     </soap:Body>
+# </soap:Envelope>
+
+
+
+# SearchDirectoryRequest for one user:
+# <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+#     <soap:Header>
+#         <context xmlns="urn:zimbra">
+#             <userAgent xmlns="" name="ZimbraWebClient - FF3.0 (Mac)"/>
+#             <sessionId xmlns="" id="365"/>
+#             <format xmlns="" type="js"/>
+#             <authToken xmlns="">
+#                 0_4902fe1a09f366ce4b32081df93a6798824aba26_69643d33363a66383466393832642d616464342d343034332d393734382d3431346366373035646539303b6578703d31333a313236343732343235333132383b61646d696e3d313a313b747970653d363a7a696d6272613b
+#             </authToken>
+#         </context>
+#     </soap:Header>
+#     <soap:Body>
+#         <SearchDirectoryRequest xmlns="urn:zimbraAdmin" offset="0" limit="25" 
+#         sortBy="name" sortAscending="1" 
+#         attrs="displayName,zimbraId,zimbraMailHost,uid,zimbraCOSId,zimbraAccountStatus,zimbraLastLogonTimestamp,description,zimbraMailStatus,zimbraCalResType,zimbraDomainType,zimbraDomainName" 
+#         types="accounts,aliases,distributionlists,resources,domains">
+#             <query xmlns="">
+#                 (|(uid=*morgan*)(cn=*morgan*)(sn=*morgan*)(gn=*morgan*)(displayName=*morgan*)(zimbraId=morgan)(mail=*morgan*)(zimbraMailAlias=*morgan*)(zimbraMailDeliveryAddress=*morgan*)(zimbraDomainName=*morgan*))
+#             </query>
+#         </SearchDirectoryRequest>
+#     </soap:Body>
+# </soap:Envelope>
+
+
+# DeleteAccountRequest:
+# <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+#     <soap:Header>
+#         <context xmlns="urn:zimbra">
+#             <userAgent name="ZimbraWebClient - FF2.0 (Linux)"/>
+#             <sessionId id="318864"/>
+#             <format type="js"/>
+#             <authToken>
+#                 0_7b49e3d97c1a15ef72f5a0a344bfe417b82fc9a6_69643d33363a38323539616631392d313031302d343366392d613338382d6439393038363234393862623b6578703d31333a313230353830353735353338343b61646d696e3d313a313b747970653d363a7a696d6272613b6d61696c686f73743d31363a3137302e3233352e312e3234313a38303b
+#             </authToken>
+#         </context>
+#     </soap:Header>
+#     <soap:Body>
+#         <DeleteAccountRequest xmlns="urn:zimbraAdmin">
+#             <id>
+#                 74c747fb-f209-475c-82c0-04fa09c5dedb
+#             </id>
+#         </DeleteAccountRequest>
+#     </soap:Body>
+# </soap:Envelope>
+
+
+# search out all users in the store:
+# <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+#     <soap:Header>
+#         <context xmlns="urn:zimbra">
+#             <userAgent name="ZimbraWebClient - FF2.0 (Linux)"/>
+#             <sessionId id="3174"/>
+#             <format type="js"/>
+#             <authToken>
+#                 0_af79e67ac4da7ae8e7a298d97392b4f82bdd8f03_69643d33363a38323539616631392d313031302d343366392d613338382d6439393038363234393862623b6578703d31333a313230353931313737363633303b61646d696e3d313a313b747970653d363a7a696d6272613b6d61696c686f73743d31363a3137302e3233352e312e3234313a38303b
+#             </authToken>
+#         </context>
+#     </soap:Header>
+#     <soap:Body>
+#         <SearchDirectoryRequest xmlns="urn:zimbraAdmin" offset="0" limit="25" sortBy="name" sortAscending="1" 
+#         attrs="displayName,zimbraId,zimbraMailHost,uid,zimbraAccountStatus,zimbraLastLogonTimestamp,description,zimbraMailStatus,zimbraCalResType,zimbraDomainType,zimbraDomainName" types="accounts">
+#             <query/>
+#         </SearchDirectoryRequest>
+#     </soap:Body>
+# </soap:Envelope>
