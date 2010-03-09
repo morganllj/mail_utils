@@ -117,6 +117,22 @@ sub rename_all_archives {
 }
 
 
+
+######
+# renew global $context--usually in response to a signal from a child
+sub renew_context () {
+    print "renewing global context in response to signal in proc $$"
+	if (exists($g_params{g_debug}));
+
+    $context = get_zimbra_context();
+    
+    if (!defined $context) {
+        die "unable to get a valid context";
+    }
+}
+
+
+
 # Package utility function(s)
 #####
 sub new {
@@ -594,15 +610,14 @@ sub add_user {
         shift if ((ref $_[0]) eq __PACKAGE__);
 	my ($zuser) = @_;
 
-	if (defined $zuser && exists $zuser->{mail}) {
-	    if (exists $archive_cache->{(@{$zuser->{mail}})[0]}) {
-		return $archive_cache->{(@{$zuser->{mail}})[0]};
-	    }
+        return undef if (!defined $zuser);
+
+	if (exists $zuser->{mail}) {
+            return $archive_cache->{(@{$zuser->{mail}})[0]}
+                if (exists $archive_cache->{(@{$zuser->{mail}})[0]});
 	}
 
-	if (defined $zuser &&
-	    exists $zuser->{zimbraarchiveaccount}) {
-
+	if (exists $zuser->{zimbraarchiveaccount}) {
 	    my $acct_name;
 
 	    for $acct_name (@{$zuser->{zimbraarchiveaccount}}) {
@@ -1129,11 +1144,14 @@ sub find_and_apply_user_diffs {
 	    
 	    # zimbraMailHost 
 	    if ($zattr =~ /^\s*zimbramailhost\s*$/) {
-		print "zimbraMailHost diff found for ";
-		print "", (@{$zuser->{mail}})[0];
-		print " Skipping.\n";
-		print "\tldap:   $l_val_str\n".
-		    "\tzimbra: $z_val_str\n";
+# 		print "zimbraMailHost diff found for ";
+# 		print "", (@{$zuser->{mail}})[0];
+# 		print " Skipping.\n";
+# 		print "\tldap:   $l_val_str\n".
+# 		    "\tzimbra: $z_val_str\n";
+
+                
+                print "", (@{$zuser->{mail}})[0], " should be on $l_val_str\n";
 		next;
 	    }
 
@@ -1308,9 +1326,7 @@ sub parse_and_del($) {
             next unless (in_subset($uid) || 
                          in_subset($mail));
 
-                        
-            print "\@mail: ", join ' ', @mail, "\n";
-	    print "deleting $mail..$uid\n";
+	    print "deleting $mail..\n";
 
  	    my $d = new XmlDoc;
  	    $d->start('DeleteAccountRequest', $MAILNS);
@@ -1506,7 +1522,7 @@ sub build_archive_account($) {
     shift if ((ref $_[0]) eq __PACKAGE__);
     my $lu = shift;
 
-    return $lu->get_value("orgghrsintemplidno")."\@".$z_params{z_domain};
+    return $lu->get_value("orgghrsintemplidno")."\@".$z_params{z_domain}.".".$z_params{z_archive_suffix};
 }
 
 ######
@@ -1713,18 +1729,7 @@ sub get_fault_reason {
     return "<no reason found..>";
 }
 
-######
-# renew global $context--usually in response to a signal from a child
-sub renew_context () {
-    print "renewing global context in response to signal in proc $$"
-	if (exists($g_params{g_debug}));
 
-    $context = get_zimbra_context();
-    
-    if (!defined $context) {
-        die "unable to get a valid context";
-    }
-}
 
 
 
