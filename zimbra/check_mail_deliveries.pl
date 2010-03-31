@@ -2,6 +2,7 @@
 #
 # name: check_mail_deliveries.pl
 
+# $Id$
 
 # description: parse a bizanga log for 2xx, 4xx and 5xx return codes
 #     and report back on percentage of 4xx and 5xx to total deliveries
@@ -18,18 +19,19 @@ use strict;
 use Getopt::Std;
 require "timelocal.pl";
 
-sub get_hostname($);
+# sub get_hostname($);
 sub print_usage();
 sub get_concise_time($);
 
 my %opts;
-getopts('f:p:dw:c:', \%opts);
+getopts('f:p:dw:c:s:', \%opts);
 
 my $filename = $opts{f} || print_usage();
 my $time_period = $opts{p} || print_usage(); # start parsing $time_period 
     #minutes before the date of the last line line the log file.
 my $warn_level = $opts{w} || 5;
 my $critical_level = $opts{c} || 5;
+my $sampling_size = $opts{s} || 500;
 
 if (exists $opts{d}) {
     print "-d used, printing debugging..\n\n";
@@ -37,18 +39,24 @@ if (exists $opts{d}) {
         "defaulting to ${warn_level}%\n";
     !exists $opts{c} && print "critical level not specified, ".
         "defaulting to ${critical_level}%\n";
+    !exists $opts{c} && print "sampling size not specified, ".
+        "defaulting to $sampling_size messages\n";
     print "\n";
 }
 
-# keep track of deliveries, deferrals and refusals by domain.
-my %deliver;
-my %defer;
-my %refuse;
+# count deliver, defer and refuse by domain
+my (%deliver, %defer, %refuse);
+
+# keep 2 lists and 2 hashes while parsing the log file:
+my @ids; # id to raw line mapping for IMP: smtpout that contains 2xx, 4xx or 5xx
+my @raw_line;
+my %id2domain;    # id to domain mapping for IMP: messages line.
+my %id2ndr;
 
 my %mon2num = qw( Jan 0  Feb 1  Mar 2  Apr 3  May 4  Jun 5 Jul 6 Aug 7 Sep 8 
                   Oct 9 Nov 10 Dec 11 );
 
-# get the last line of the log to know what time to start parsing.
+# get the last line of the log to know the time at the end of the log file
 my $last_line = `tail -1 $filename`;
 print "last line: $last_line\n"
     if (exists $opts{d});
@@ -59,13 +67,11 @@ my ($mon, $day, $hour, $min, $sec) =
 my $year = (localtime(time()))[5] + 1900;
 my $end_time = timelocal($sec, $min, $hour, $day, $mon2num{$mon}, $year);
 
-my $start_time;
+my $start_time;  # time we start parsing log entries: $end_time - ($time_period * 60)
 
 open IN, $filename || die "can't open $filename";
 
 while (<IN>) {
-    chomp;
-
     if (/IMP: smtpout/) {
         chomp;
 
@@ -79,41 +85,90 @@ while (<IN>) {
         next unless ($line_time > ($end_time - ($time_period * 60)));
         $start_time = $line_time unless defined $start_time;
 
-        if (/smtp=[^:]+:([245]{1}[^\s]+)\s+/) {
-            my $status = $1;
-            
-            my ($ip) = /dip=([^\s]+)\s/i;
+        if (/smtp=[^:]+:[245]{1}[^\s]+\s+/) {
+            my ($id) = /\s+id=([^\s]+)\s+/;
+            push @ids, $id;
+            push @raw_line, $_;
+        }
+    } elsif (/IMP: messages/) {
+        # Note that we don't limit messages by time, we pull them all
+        # in as there may be corresponding messages logs prior to the
+        # time period.
+        chomp;
 
-            my $h = get_hostname($ip);
-            next
-                if ($h =~ /not found/i);
-            $h =~ s/\.$//;
-            chomp $h;
-            my @h = split /\s/, $h;
-            my @h2 = split /\./, $h[$#h];
-            my $domain = join '.', $h2[$#h2-1], $h2[$#h2];
-            if ($status =~ /^2/) {
-                print "deliver, $domain: /$_/\n"
+        my $domain;
+        my ($id) = /\s+id=([^\s]+)\s+/;
+        if (/to=\"([^\"]+)\"/) {
+            my $to_contents = $1;
+            # $to_contents can have two possible formats, commented after the if:
+            if ($to_contents =~ /\,/) {  # to="user1@domain.com,user2@domain.com"
+                 for my $a (split /\s*\,\s*/, $to_contents) {
+                     if ($a =~ /[^\@]+\@(.*)/) {
+                         $domain = $1 if !defined $domain;
+                         warn "multiple domains in to: $to_contents for id $id"
+                             if (defined $domain && $domain ne $1 && exists $opts{d});
+                     } else {
+                         warn "possible malformed contents in to: $to_contents for id $id"
+                             if (exists $opts{d});
+                     }
+                 }
+            } elsif ($to_contents =~ /[^\@]+\@(.*)/) {  # to="user@domain.com"
+                $domain = $1;
+            } else {
+                print "malformed to contents: /$to_contents/\n"
                     if (exists $opts{d});
-                $deliver{lc $domain}++;
-            } elsif ($status =~ /^4/) {
-                print "defer, $domain: /$_/\n"
-                    if (exists $opts{d});
-                $defer{lc $domain}++;
-            } elsif ($status =~ /^5/) {
-                print "refuse, $domain: /$_/\n"
-                    if (exists $opts{d});
-                $refuse{lc $domain}++;
             }
         } else {
-            # TODO?
-            # Mar 16 00:00:21 dsmdc-mail-bxga4/dsmdc-mail-bxga4 IMP: smtpout 
-            #   id=th0L1d00711nQh501h0Ly7 state="Sent" dip=74.125.113.27 dport=25
-            # print "no delivery status: /$_/\n";
+            next; # there is no to= in the messages log, ignore.
         }
+        $id2domain{$id} = lc $domain;
+    } elsif (/IMP: ndr/) {
+        my ($id) = /\s+id=([^\s]+)\s+/;
+        $id2ndr{$id} = 1;
+    } else {
+        # TODO?
+        # Mar 16 00:00:21 dsmdc-mail-bxga4/dsmdc-mail-bxga4 IMP: smtpout 
+        #   id=th0L1d00711nQh501h0Ly7 state="Sent" dip=74.125.113.27 dport=25
+        # print "no delivery status: /$_/\n";
     }
 }
 
+
+
+# connect id with domain and count status by domain.
+my $i=0;
+for my $id (@ids) {
+    my $status = $raw_line[$i++];
+    my $raw_line = $status;
+    $status =~ /smtp=[^:]+:([245]{1}[^\s]+)\s+/;
+    $status = $1;
+
+    if (!exists $id2domain{$id} && !exists($id2ndr{$id})) {
+        print "no messages or ndr entry: /$raw_line/\n"
+            if (exists $opts{d});
+        next;
+    }
+
+    my $domain = $id2domain{$id};
+    next unless (defined $domain);
+
+    if ($status =~ /^2/) {
+        print "deliver, $domain: /$raw_line/\n"
+            if (exists $opts{d});
+        $deliver{$domain}++;
+    } elsif ($status =~ /^4/) {
+        print "defer, $domain: /$raw_line/\n"
+            if (exists $opts{d});
+        $defer{$domain}++;
+    } elsif ($status =~ /^5/) {
+        print "refuse, $domain: /$raw_line/\n"
+            if (exists $opts{d});
+        $refuse{$domain}++;
+    }
+
+}
+
+# Print output in a format Nagios can parse
 # http://nagiosplug.sourceforge.net/developer-guidelines.html#AEN33
 my $rc = 0;
 my $deferred;
@@ -133,7 +188,7 @@ for my $k (sort keys %defer) {
     }
 
     $rc = 1 
-        if (($per_deferred > $warn_level) && ($rc < 1));
+        if (($per_deferred > $warn_level && $total > $sampling_size) && ($rc < 1));
 }
 
 for my $k (sort keys %refuse) {
@@ -150,7 +205,7 @@ for my $k (sort keys %refuse) {
     }
 
     $rc = 2
-        if (($per_refused > $critical_level) && ($rc < 2));
+        if (($per_refused > $critical_level && $total > $sampling_size) && ($rc < 2));
 }
 
 print "\n"
@@ -166,9 +221,10 @@ if ($rc == 0) {
     print "UNKNOWN";
 }
 
-print " - " if (defined $refused || defined $deferred);
-
-print get_concise_time($start_time), " to ", get_concise_time($end_time), " ";
+if (defined $refused || defined $deferred) {
+    print " - ";
+    print get_concise_time($start_time), " to ", get_concise_time($end_time), " ";
+}
 
 if (defined $refused) {
     print "refused: $refused";
@@ -199,34 +255,38 @@ sub get_concise_time($) {
 }
 
 
-######
-{
-    # maintain a local cache of ip address to host mappings so we
-    # don't need to look up the same value twice.  Host name lookups
-    # are the slowest part of this process.
-    my %host_cache;
+# ######
+#  Saved should we ever go back to determining domains from reverses lookup of ip..
+# {
+#     # maintain a local cache of ip address to host mappings so we
+#     # don't need to look up the same value twice.  Host name lookups
+#     # are the slowest part of this process.
+#     my %host_cache;
 
-    sub get_hostname($) {
-        my $ip = shift;
+#     sub get_hostname($) {
+#         my $ip = shift;
         
-        my $h;
-        if (!exists $host_cache{$ip}) {
-            $h = (split /\n/, `host $ip`)[0];
-            $host_cache{$ip} = $h;
-        }
-        return $host_cache{$ip};
-    }
-}
+#         my $h;
+#         if (!exists $host_cache{$ip}) {
+#             $h = (split /\n/, `host $ip`)[0];
+#             $host_cache{$ip} = $h;
+#         }
+#         return $host_cache{$ip};
+#     }
+# }
 
 ######
 sub print_usage() {
     print "\n";
-    print "usage: $0 [-d] -f <filename> -p <timeperiod> -w <\n";
+    print "usage: $0 [-d] -f <filename> -p <timeperiod> \n".
+        "\t[-w <level>] [-c <level>] [-s <sampling size>]\n\n";
+    print "\toptions in [] are optional\n";
     print "\t[-d] print debug output, optional\n";
     print "\t-f <filename> log filename to open\n";
     print "\t-p <timeperiod> time in minutes to begin parsing from bottom of log\n";
-    print "\t-w <level> warn percent: only applies to deferrals\n";
-    print "\t-c <level> critial percent: only applies to refusals\n";
+    print "\t[-w <level>] warn percent: only applies to deferrals\n";
+    print "\t[-c <level>] critial percent: only applies to refusals\n";
+    print "\t[-s <sampling size>] number of messages before a warn or critical.\n";
     print "\n";
     
     exit;
