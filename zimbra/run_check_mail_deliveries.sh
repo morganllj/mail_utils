@@ -1,5 +1,6 @@
 #!/bin/sh
 #
+# $Id$
 
 log_base="/home/morgan/logs_for_dev"
 log_file=`ls -1trah ${log_base}/????.??.??/dsmdc-mail-bxga3/mail.log|tail -1`
