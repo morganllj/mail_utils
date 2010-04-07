@@ -1,15 +1,15 @@
 #!/usr/bin/perl -w
 #
 # name: check_mail_deliveries.pl
-
+#
 # $Id$
-
+#
 # description: parse a bizanga log for 2xx, 4xx and 5xx return codes
 #     and report back on percentage of 4xx and 5xx to total deliveries
 #     in a format in which Nagios can parse and notify.
 # author: Morgan Jones (morgan@01.com)
 # date: 3/26/10
-
+#
 # Designed to work on a combined log of all bizanga bizimp log entries
 # sent through syslog.  It may work on logs written directly by the
 # bizimp but that has not been tested.  If running on separate logs
@@ -24,7 +24,7 @@ sub print_usage();
 sub get_concise_time($);
 
 my %opts;
-getopts('f:p:dw:c:s:', \%opts);
+getopts('f:p:dw:c:s:o:', \%opts);
 
 my $filename = $opts{f} || print_usage();
 my $time_period = $opts{p} || print_usage(); # start parsing $time_period 
@@ -32,6 +32,11 @@ my $time_period = $opts{p} || print_usage(); # start parsing $time_period
 my $warn_level = $opts{w} || 5;
 my $critical_level = $opts{c} || 5;
 my $sampling_size = $opts{s} || 500;
+
+if (exists $opts{o}) {
+    my $output_file = $opts{o};
+    open OUT, ">$output_file" || die "can't open $output_file for writing";
+}
 
 if (exists $opts{d}) {
     print "-d used, printing debugging..\n\n";
@@ -63,7 +68,7 @@ print "last line: $last_line\n"
 
 # format we're parsing: Mar 16 23:59:59
 my ($mon, $day, $hour, $min, $sec) = 
-    ($last_line =~ /([a-z]{3})\s(\d{2})\s(\d{2}):(\d{2}):(\d{2})/i);
+    ($last_line =~ /([a-z]{3})\s+(\d{1,2})\s(\d{2}):(\d{2}):(\d{2})/i);
 my $year = (localtime(time()))[5] + 1900;
 my $end_time = timelocal($sec, $min, $hour, $day, $mon2num{$mon}, $year);
 
@@ -76,7 +81,7 @@ while (<IN>) {
         chomp;
 
         my ($l_mon, $l_day, $l_hour, $l_min, $l_sec) = 
-            /([a-z]{3})\s(\d{2})\s(\d{2}):(\d{2}):(\d{2})/i;
+            /([a-z]{3})\s+(\d{1,2})\s(\d{2}):(\d{2}):(\d{2})/i;
         my $line_time = 
             timelocal($l_sec, $l_min, $l_hour, $l_day, $mon2num{$l_mon}, $year);
 
@@ -181,10 +186,10 @@ for my $k (sort keys %defer) {
 
     my $per_deferred = sprintf "%.f", ($defer{$k} / $total) * 100;
 
-    if ($per_deferred > 0) {
+    if ($per_deferred > 0 && $total > $sampling_size) {
         $deferred .= " "
             unless (!defined $deferred);
-        $deferred .= "$k=$per_deferred%";
+        $deferred .= "$k"."=".$per_deferred."%,".$defer{$k}."/".$total;
     }
 
     $rc = 1 
@@ -198,10 +203,11 @@ for my $k (sort keys %refuse) {
 
     my $per_refused = sprintf "%.f", ($refuse{$k} / $total) * 100;
 
-    if ($per_refused > 0) {
+    if ($per_refused > 0 && $total > $sampling_size) {
         $refused .= " "
             unless (!defined $refused);
-        $refused .= "$k=$per_refused%";
+        #$refused .= "$k=".$refuse{$k}."/".$total.",$per_refused%";
+        $refused .= $k."=".$per_refused."%,".$refuse{$k}."/".$total;
     }
 
     $rc = 2
@@ -211,29 +217,36 @@ for my $k (sort keys %refuse) {
 print "\n"
     if exists $opts{d};
 
+my $print_state;
 if ($rc == 0) {
-    print "OK";
+    $print_state = "OK";
 } elsif ($rc == 1) {
-    print "WARN";
+    $print_state = "WARN";
 } elsif ($rc == 2) {
-    print "CRITICAL";
+    $print_state = "CRITICAL";
 } else {
-    print "UNKNOWN";
+    $print_state = "UNKNOWN";
 }
 
 if (defined $refused || defined $deferred) {
-    print " - ";
-    print get_concise_time($start_time), " to ", get_concise_time($end_time), " ";
+    $print_state .= " - ";
+    $print_state .= get_concise_time($start_time) . " to " . get_concise_time($end_time) . " ";
 }
 
 if (defined $refused) {
-    print "refused: $refused";
+    $print_state .= "refused: $refused";
 } 
 if (defined $deferred) {
-    print " - " if (defined $refused);
-    print "deferred: $deferred";
+    $print_state .= " - " if (defined $refused);
+    $print_state .= "deferred: $deferred";
 }
-print "\n";
+$print_state .= "\n";
+
+if (exists $opts{o}) {
+    print OUT $print_state;
+} else {
+    print $print_state;
+}
 
 exit $rc;
 
@@ -279,7 +292,7 @@ sub get_concise_time($) {
 sub print_usage() {
     print "\n";
     print "usage: $0 [-d] -f <filename> -p <timeperiod> \n".
-        "\t[-w <level>] [-c <level>] [-s <sampling size>]\n\n";
+        "\t[-w <level>] [-c <level>] [-s <sampling size>] [-o output]\n\n";
     print "\toptions in [] are optional\n";
     print "\t[-d] print debug output, optional\n";
     print "\t-f <filename> log filename to open\n";
@@ -287,6 +300,7 @@ sub print_usage() {
     print "\t[-w <level>] warn percent: only applies to deferrals\n";
     print "\t[-c <level>] critial percent: only applies to refusals\n";
     print "\t[-s <sampling size>] number of messages before a warn or critical.\n";
+    print "\t[-o <output>] file to write the output.\n";
     print "\n";
     
     exit;
