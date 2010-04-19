@@ -24,7 +24,22 @@ sub print_usage();
 sub get_concise_time($);
 
 my %opts;
-getopts('f:p:dw:c:s:o:', \%opts);
+getopts('f:p:dw:c:s:o:r:', \%opts);
+
+
+if (exists $opts{r}) {
+    my $output_file = $opts{r};
+    open IN2, $output_file || die "problem opening $output_file";
+    my $return = <IN2>;
+    my $nag_status = <IN2>;
+    if (!defined $return || !defined $nag_status) {
+        print "problem reading output format.. please check that the format is:\n";
+        print "<rc>\n<OK|WARN|CRIT>\n";
+        exit;
+    }
+    print $nag_status;
+    exit $return;
+}
 
 my $filename = $opts{f} || print_usage();
 my $time_period = $opts{p} || print_usage(); # start parsing $time_period 
@@ -242,7 +257,10 @@ if (defined $deferred) {
 }
 $print_state .= "\n";
 
+
+
 if (exists $opts{o}) {
+    print OUT $rc . "\n";
     print OUT $print_state;
 } else {
     print $print_state;
@@ -291,8 +309,12 @@ sub get_concise_time($) {
 ######
 sub print_usage() {
     print "\n";
-    print "usage: $0 [-d] -f <filename> -p <timeperiod> \n".
-        "\t[-w <level>] [-c <level>] [-s <sampling size>] [-o output]\n\n";
+    print "usage:\n";
+    print "$0 [-d] -f <filename> -p <timeperiod> \n".
+        "\t[-w <level>] [-c <level>] [-s <sampling size>] [-o <output>]\n";
+    print "or\n";
+    print "$0 -r <filename>\n";
+    print "\n";
     print "\toptions in [] are optional\n";
     print "\t[-d] print debug output, optional\n";
     print "\t-f <filename> log filename to open\n";
@@ -302,6 +324,8 @@ sub print_usage() {
     print "\t[-s <sampling size>] number of messages before a warn or critical.\n";
     print "\t[-o <output>] file to write the output.\n";
     print "\n";
-    
+    print "\t-r <filename> read the output generated from -o and return the\n".
+        "\t\tappropriate value and put the output.  This is the option you would use if\n".
+        "\t\tcalling directly from Nagios.\n";
     exit;
 }
