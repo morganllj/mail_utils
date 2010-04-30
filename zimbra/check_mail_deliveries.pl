@@ -48,11 +48,6 @@ my $warn_level = $opts{w} || 5;
 my $critical_level = $opts{c} || 5;
 my $sampling_size = $opts{s} || 500;
 
-if (exists $opts{o}) {
-    my $output_file = $opts{o};
-    open OUT, ">$output_file" || die "can't open $output_file for writing";
-}
-
 if (exists $opts{d}) {
     print "-d used, printing debugging..\n\n";
     !exists $opts{w} && print "warn level not specified, ".
@@ -257,7 +252,10 @@ if (defined $deferred) {
 }
 $print_state .= "\n";
 
-
+if (exists $opts{o}) {
+    my $output_file = $opts{o};
+    open OUT, ">$output_file" || die "can't open $output_file for writing";
+}
 
 if (exists $opts{o}) {
     print OUT $rc . "\n";
@@ -265,6 +263,9 @@ if (exists $opts{o}) {
 } else {
     print $print_state;
 }
+
+close OUT
+    if (exists $opts{o});
 
 exit $rc;
 
