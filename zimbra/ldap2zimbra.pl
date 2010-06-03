@@ -55,6 +55,7 @@ use POSIX ":sys_wait_h";
 $|=1;
 
 sub print_usage();
+sub renew_context();
 
 my %opts;
 my %arg_h;
@@ -303,4 +304,6 @@ sub print_usage() {
 }
 
 
-
+sub renew_context() {
+    $zu->renew_context();
+}

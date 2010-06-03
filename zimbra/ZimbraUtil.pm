@@ -5,6 +5,13 @@ package ZimbraUtil;
 # TODO: check where variables are initialized and move to new if appropriate.
 #       generalize build_zmailhost()
 #       unbind ldap explicitely
+#
+# create calendar-admin, calendar-pd and associated calendars
+# create default_domain.archive
+# mkdir -p ldap2zimbra/child_status ldap2zimbra/log
+# make sure /usr/local/zcs-5.0.2_GA_1975-src is in place.
+# from RPMForge:
+# yum install perl-XML-Parser perl-LWP-UserAgent-Determined perl-LDAP
 
 use strict;
 use lib "/usr/local/zcs-5.0.2_GA_1975-src/ZimbraServer/src/perl/soap";
@@ -59,16 +66,18 @@ my $exclude_group_rdn = "cn=orgexcludes";  # assumed to be in $ldap_base
 
 # Zimbra defaults
 my %z_params = (
-    z_server => "dmail01.domain.org",
+    z_server => "dmail02.domain.org",
     z_pass => "pass",
-    z_domain => "dev.domain.org",  # mail domain
+    z_domain => "dmail02.domain.org",  # mail domain
     z_archive_mailhost => "dmail02.domain.org",
     z_archive_suffix => "archive",
     # TODO: look up cos by name instead of requiring the user enter the cos id.
     # production:
-    # z_archive_cos_id => "249ef618-29d0-465e-86ae-3eb407b65540",
+    #z_archive_cos_id => "249ef618-29d0-465e-86ae-3eb407b65540",
+    # dmail02
+    z_archive_cos_id => "e00428a1-0c00-11d9-836a-000d93afea2a",
     # dev:
-    z_archive_cos_id => "c0806006-9813-4ff2-b0a9-667035376ece",
+    # z_archive_cos_id => "c0806006-9813-4ff2-b0a9-667035376ece",
 
 );
 
@@ -84,11 +93,17 @@ my @global_cals = (
       name  => "~Academic Calendar",
       path  => "/~Academic Calendar",
       exists => 0 },
-# we're still waiting for approval on this:
+
 #    { owner => "calendar-pd\@" . $default_domain,
 #      name  => "~PDPlanner",
 #      path => "/~PDPlanner",
 #      exists => 0 }
+
+    { owner => "calendar-pd\@" . get_default_domain(),
+      name  => "~ProfDev Calendar",
+      path => "/~ProfDev Calendar",
+      exists => 0 }
+
 );
 
 
@@ -1566,6 +1581,8 @@ sub build_zmailhost($) {
 		"returning undef.";
 	    return undef;
 	}
+    } elsif (get_z_domain() eq "dmail02.domain.org") {
+        return "dmail02.domain.org";
     } else {
 	print "WARNING! zimbraMailHost will be undefined because domain ",
             get_z_domain(), " is not recognized.\n";
