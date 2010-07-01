@@ -56,6 +56,7 @@ $|=1;
 
 sub print_usage();
 sub renew_context();
+sub exit_on_sigterm();
 
 my %opts;
 my %arg_h;
@@ -105,6 +106,7 @@ print "\nadd/modify phase..", `date`;
 
 my $pids;  # keep track of PIDs as child processes run
 $SIG{HUP} = \&renew_context; # handler to cause context to be reloaded.
+$SIG{TERM} = \&exit_on_sigterm; # if there's a fatal error in a child it will send SIGTERM to parent..
 
 print $#ldap_entries + 1, " entries to process..\n";
 my $users_left = $#ldap_entries + 1;
@@ -306,4 +308,9 @@ sub print_usage() {
 
 sub renew_context() {
     $zu->renew_context();
+}
+
+sub exit_on_sigterm() {
+    print "SIGTERM received at top level, exiting..\n";
+    exit;
 }

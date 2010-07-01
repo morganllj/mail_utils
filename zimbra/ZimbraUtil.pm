@@ -73,7 +73,7 @@ my %z_params = (
     z_archive_suffix => "archive",
     # TODO: look up cos by name instead of requiring the user enter the cos id.
     # production:
-    #z_archive_cos_id => "249ef618-29d0-465e-86ae-3eb407b65540",
+    # z_archive_cos_id => "249ef618-29d0-465e-86ae-3eb407b65540",
     # dmail02
     z_archive_cos_id => "e00428a1-0c00-11d9-836a-000d93afea2a",
     # dev:
@@ -93,11 +93,6 @@ my @global_cals = (
       name  => "~Academic Calendar",
       path  => "/~Academic Calendar",
       exists => 0 },
-
-#    { owner => "calendar-pd\@" . $default_domain,
-#      name  => "~PDPlanner",
-#      path => "/~PDPlanner",
-#      exists => 0 }
 
     { owner => "calendar-pd\@" . get_default_domain(),
       name  => "~ProfDev Calendar",
@@ -326,7 +321,7 @@ sub ooul_func_rename_archives($) {
                         
                         print "problem renaming user: $rsn\n";
                         print Dumper($r);
-                        next;
+                        multi_proc_exit();
                     }
                 }
             } else {
@@ -350,10 +345,10 @@ sub ooul_func_rename_archives($) {
                 if ($r->name eq "Fault") {
                     my $rsn = get_fault_reason($r2);
                     
-                    print "problem setting attribures (zimbraarchiveaccount and ".
+                    print "problem setting attributes (zimbraarchiveaccount and ".
                         "amavisarchivequarantineto):\n\t$rsn\n";
                     print Dumper($r2);
-                    next;
+                    multi_proc_exit();
                 }
             }
         }
@@ -508,7 +503,7 @@ sub get_z_user($) {
 	if ($rsn ne "account.NO_SUCH_ACCOUNT") {
 	    print "problem searching out user:\n";
 	    print Dumper($r);
-	    exit;
+            multi_proc_exit();
 	}
     }
 
@@ -581,7 +576,7 @@ sub add_user {
 	if ($r->name eq "Fault") {
 	    print "problem adding user:\n";
 	    print Dumper $r;
-	    return;
+            multi_proc_exit();
 	}
 
 	my $mail;
@@ -651,7 +646,7 @@ sub add_user {
 		    if ($rsn ne "account.NO_SUCH_ACCOUNT") {
 			print "problem searching out archive $acct_name\n";
 			print Dumper($r2);
-			return;
+                        multi_proc_exit();
 		    }
 		}
 
@@ -718,6 +713,7 @@ sub add_archive_acct {
 	if ($r3->name eq "Fault") {
 	    print "problem adding user:\n";
 	    print Dumper $r3;
+            multi_proc_exit();
 	}
 
 	if (exists $g_params{g_debug} && !exists $g_params{g_printonly}) {
@@ -808,11 +804,11 @@ sub operate_on_user_list {
             @l = operate_on_range(undef, "a", "z", $func, %args);
         } else {
             print "unhandled reason: $rsn, exiting.\n";
-            exit;
+            print Dumper($r);
+            multi_proc_exit();
         }
     } else {
         print "returned ", $r->num_children, " children\n";
-        
         @l = $func->($r, %args);
     }
 
@@ -894,7 +890,8 @@ sub operate_on_range {
 		decrement_del_recurse();
 	    } else {
 		print "unhandled reason: $rsn, exiting.\n";
-		exit;
+                print Dumper($r);
+                multi_proc_exit();
 	    }
 
  	} else {
@@ -1711,8 +1708,11 @@ sub delete_not_in_ldap() {
 	if ($r->name ne "account") {
 	    print "skipping delete, unknown record type returned: ", 
 	    $r->name, "\n";
-	    return;
 	}
+
+        print "problem during delete: \n";
+        print Dumper($r);
+        return;
     }
 
     parse_and_del($r);
@@ -2076,6 +2076,13 @@ sub check_for_global_cals() {
         $c->{exists} = cal_exists($c->{owner}, $c->{name});
     }
 
+}
+
+
+sub multi_proc_exit() {
+    print "killing parent to cause complete exit..\n";
+    kill('TERM', $parent_pid);            
+    exit;
 }
 
 
