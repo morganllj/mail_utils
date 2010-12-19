@@ -14,7 +14,8 @@ package ZimbraUtil;
 # yum install perl-XML-Parser perl-LWP-UserAgent-Determined perl-LDAP
 
 use strict;
-use lib "/usr/local/zcs-5.0.2_GA_1975-src/ZimbraServer/src/perl/soap";
+#use lib "/usr/local/zcs-5.0.2_GA_1975-src/ZimbraServer/src/perl/soap";
+use lib "/usr/local/zcs-6.0.7_GA_2483-src/ZimbraServer/src/perl/soap";
 use XmlElement;
 use XmlDoc;
 use Soap;
@@ -42,7 +43,6 @@ my $all_users;
 my $ACCTNS = "urn:zimbraAdmin";
 my $MAILNS = "urn:zimbraAdmin";
 my $SOAP = $Soap::Soap12;
-my $sessionId;
 my $url;
 
 # ldap defaults
@@ -66,16 +66,16 @@ my $exclude_group_rdn = "cn=orgexcludes";  # assumed to be in $ldap_base
 
 # Zimbra defaults
 my %z_params = (
-    z_server => "dmail02.domain.org",
+    z_server => "mail02.domain.org",
     z_pass => "pass",
-    z_domain => "dmail02.domain.org",  # mail domain
-    z_archive_mailhost => "dmail02.domain.org",
+    z_domain => "domain.org",  # mail domain
+    z_archive_mailhost => "mail06.domain.org",
     z_archive_suffix => "archive",
     # TODO: look up cos by name instead of requiring the user enter the cos id.
     # production:
-    # z_archive_cos_id => "249ef618-29d0-465e-86ae-3eb407b65540",
+    z_archive_cos_id => "249ef618-29d0-465e-86ae-3eb407b65540",
     # dmail02
-    z_archive_cos_id => "e00428a1-0c00-11d9-836a-000d93afea2a",
+    # z_archive_cos_id => "e00428a1-0c00-11d9-836a-000d93afea2a",
     # dev:
     # z_archive_cos_id => "c0806006-9813-4ff2-b0a9-667035376ece",
 
@@ -931,6 +931,7 @@ sub get_zimbra_context {
     # authenticate to Zimbra admin url
     my $d = new XmlDoc;
     $d->start('AuthRequest', $ACCTNS);
+    $d->add('SessionId', undef, undef, undef);
     $d->add('name', undef, undef, "admin");
     $d->add('password', undef, undef, $z_params{z_pass});
     $d->end();
@@ -944,9 +945,11 @@ sub get_zimbra_context {
 
 
     my $authToken = $r->find_child('authToken')->content;
-    $sessionId = $r->find_child('sessionId')->content;
 
-    my $cntxt = $SOAP->zimbraContext($authToken, $sessionId);
+#    $sessionId = $r->find_child('sessionId')->content;
+
+#    my $cntxt = $SOAP->zimbraContext($authToken, $sessionId);
+    my $cntxt = $SOAP->zimbraContext($authToken, undef);
 
     if (defined($delegate_to)) {
         $d = new XmlDoc;
@@ -964,9 +967,10 @@ sub get_zimbra_context {
             if ($r->name eq "Fault");
 
         $authToken = $r->find_child('authToken')->content;
-        $sessionId = $r->find_child('sessionId')->content;
+#        $sessionId = $r->find_child('sessionId')->content;
         
-        my $new_cntxt = $SOAP->zimbraContext($authToken, $sessionId);
+#        my $new_cntxt = $SOAP->zimbraContext($authToken, $sessionId);
+        my $new_cntxt = $SOAP->zimbraContext($authToken, undef);
 
         #TODO:  only print if debug?
         #print "returning new_cntxt because delegate_to is $delegate_to\n";
@@ -1233,7 +1237,7 @@ sub delete_in_range {
     my $i=1;
     do {
 
-        for my $l (${beg}..${end}) {
+        for my $l (${beg}..${end}, "_", "-") {
             my $fil = 'uid=';
             $fil .= $prfx if (defined $prfx);
             $fil .= "${l}\*";
@@ -1256,7 +1260,7 @@ sub delete_in_range {
                 if (get_del_recurse() > $max_recurse) {
                     print "\tmax recursion ($max_recurse) hit, backing off..\n";
                     decrement_del_recurse();
-                    return 1; #return failure so caller knows to return
+                    return undef; #return failure so caller knows to return
                     #and not keep trying to recurse to this
                     #level
                 }
@@ -1511,7 +1515,8 @@ sub build_phone_fax($) {
     }
 
     if (defined (my $f = $lu->get_value("orgworkfax"))) {
-	$r .= "  " if (defined $r);
+        # only add "<br>" if there's a telephone
+	$r .= "<BR>" if (defined $r);
 	$f =~ s/(\d{3})(\d{3})(\d{4})/$1$phone_separator$2$phone_separator$3/;
 	$r .= "Fax: " . $f;
     }
@@ -1788,7 +1793,8 @@ sub get_fault_reason {
       }
       
       my $new_auth_token = $r->find_child('authToken')->content;
-      my $new_context = $SOAP->zimbraContext($new_auth_token, $sessionId);
+#      my $new_context = $SOAP->zimbraContext($new_auth_token, $sessionId);
+      my $new_context = $SOAP->zimbraContext($new_auth_token, undef);
 
       # Compare user calendars with defined calendars
       for my $gc (@work_gcs) {
@@ -2002,7 +2008,8 @@ sub prime_cal_cache($) {
 
     # assumes get_zimbra_context has been called to populate
     # $sessionId already.  I think that is a safe assumption
-    my $new_context = $SOAP->zimbraContext($new_auth_token, $sessionId);
+#    my $new_context = $SOAP->zimbraContext($new_auth_token, $sessionId);
+    my $new_context = $SOAP->zimbraContext($new_auth_token, undef);
 
     my @my_cals;
 
@@ -2060,7 +2067,8 @@ sub delete_cal {
 
     my $new_auth_token = $r->find_child('authToken')->content;
 
-    my $new_context = $SOAP->zimbraContext($new_auth_token, $sessionId);
+#    my $new_context = $SOAP->zimbraContext($new_auth_token, $sessionId);
+    my $new_context = $SOAP->zimbraContext($new_auth_token, undef);
 
     # Get all calendar mounts for the user
     $d = new XmlDoc();
