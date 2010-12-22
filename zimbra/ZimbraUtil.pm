@@ -66,18 +66,16 @@ my $exclude_group_rdn = "cn=orgexcludes";  # assumed to be in $ldap_base
 
 # Zimbra defaults
 my %z_params = (
-    z_server => "mail02.domain.org",
+    z_server => "dmail01.domain.org",
     z_pass => "pass",
-    z_domain => "domain.org",  # mail domain
-    z_archive_mailhost => "mail06.domain.org",
+    z_domain => "dev.domain.org",  # mail domain
+    z_archive_mailhost => "dmail02.domain.org",
     z_archive_suffix => "archive",
     # TODO: look up cos by name instead of requiring the user enter the cos id.
     # production:
-    z_archive_cos_id => "249ef618-29d0-465e-86ae-3eb407b65540",
-    # dmail02
-    # z_archive_cos_id => "e00428a1-0c00-11d9-836a-000d93afea2a",
+    # z_archive_cos_id => "249ef618-29d0-465e-86ae-3eb407b65540",
     # dev:
-    # z_archive_cos_id => "c0806006-9813-4ff2-b0a9-667035376ece",
+    z_archive_cos_id => "c0806006-9813-4ff2-b0a9-667035376ece",
 
 );
 
@@ -340,7 +338,7 @@ sub ooul_func_rename_archives($) {
             $d2->add('a', $MAILNS, {"n" => "amavisarchivequarantineto"}, $new_archive);
             $d2->end();
 
-            unless ($g_params{g_printonly}) {
+            unless (exists $g_params{g_printonly}) {
                 my $r2 = check_context_invoke($d2, \$context);
                 if ($r->name eq "Fault") {
                     my $rsn = get_fault_reason($r2);
@@ -1185,7 +1183,7 @@ sub find_and_apply_user_diffs {
 	$o =~ s/ns0\://g;
 	print $o;
 
-	if (!exists $g_params{g_print_only}) {
+	if (!exists $g_params{g_printonly}) {
 	    my $r = check_context_invoke($d, \$context);
 
             # TODO: check result of invoke?
