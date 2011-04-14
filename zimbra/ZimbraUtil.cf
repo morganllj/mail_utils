@@ -1,0 +1,183 @@
+use ZimbraUtil;
+
+#my $zu = new ZimbraUtil;
+
+# mkdir ldap2zimbra 
+# mkdir ldap2zimbra ldap2zimbra/log ldap2zimbra/child_status
+# cp run_ldap2zimbra.sh ldap2zimbra.pl ZimbraUtil.pm ZimbraUtil.cf ldap2zimbra
+# chmod 700 ldap2zimbra/ldap2zimbra.pl ldap2zimbra/run_ldap2zimbra.sh
+# su
+# cd /usr/local
+# tar xfz ~morgan/zcs-5.0.2_GA_1975-src.tgz
+# exit
+# yum install perl-XML-Parser perl-LDAP
+# ldap2zimbra/run_ldap2zimbra.sh -n
+# 
+
+
+@zimbra_special = qw/admin galsync.* ham.* spam.* virus-quarantine.*/;
+@local_domains = qw/ext.domain.org cett.dc=domain,dc=org dafvm.dc=domain,dc=org srdc.domain.org/;
+
+# relative directory where files will be created to track children
+#  process while script runs.  If ldap2zimbra.pl is in a directory
+#  called "ldap2zimbra," you'll need to create a directory within that
+#  directory and put its name here.
+$relative_child_status_path = "/child_status";
+
+# ldap defaults
+# %l_params = (
+#     l_host => "ldap0.domain.org",
+#     l_binddn => "cn=directory manager",
+#     l_bindpass => "pass",
+#     l_base => "dc=domain,dc=org",
+#     # debugging:
+#     # l_filter = 
+#     #  "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
+#     #    "(orghomeorgcd=9500)";
+#     # l_filter = "(orghomeorgcd=9500)";
+#     # production:
+#     l_filter => "(objectclass=orgZimbraPerson)"
+# );
+
+$l_params{l_host} = "atlas.ext.domain.org";
+$l_params{l_binddn} = "cn=directory manager";
+$l_params{l_bindpass} = "pass.";
+$l_params{l_base} ="o=msu_ag";
+    # debugging:
+    # l_filter = 
+    #  "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
+    #    "(orghomeorgcd=9500)";
+    # l_filter = "(orghomeorgcd=9500)";
+    # production:
+#$l_params{l_filter} = "(objectclass=orgZimbraPerson)";
+$l_params{l_filter} = "(&(objectclass=inetMailUser)(maildeliveryoption=mailbox))";
+
+# rdn of the LDAP group containing accounts that will be excluded from ldap2zimbra
+#   processing.
+# leave blank to include all users
+$exclude_group_rdn = "";  # assumed to be in $ldap_base
+
+# Zimbra defaults
+# %z_params = (
+#     z_server => "dmail01.domain.org",
+#     z_pass => "pass",
+#     z_domain => "dev.domain.org",  # mail domain
+#     z_archive_mailhost => "dmail02.domain.org",
+#     z_archive_suffix => "archive",
+#     # TODO: look up cos by name instead of requiring the user enter the cos id.
+#     # production:
+#     # z_archive_cos_id => "249ef618-29d0-465e-86ae-3eb407b65540",
+#     # dev:
+#     z_archive_cos_id => "c0806006-9813-4ff2-b0a9-667035376ece",
+
+# );
+
+#our %z_params;
+
+$z_params{z_server} = "130.18.22.17";
+$z_params{z_pass} = "pass";
+
+# TODO: relevant multi domain mode?
+$z_params{z_domain} = "",  # mail domain;
+
+# leave archive_mailhost blank if you do not use Zimbra Archiving
+$z_params{z_archive_mailhost} = "";
+$z_params{z_archive_suffix} = "archive";
+$z_params{z_archive_domain} = $z_params{z_domain} . "." . "archive";
+    # TODO: look up cos by name instead of requiring the user enter the cos id.
+    # production:
+    # z_archive_cos_id => "249ef618-29d0-465e-86ae-3eb407b65540",
+    # dev:
+$z_params{z_archive_cos_id} = "c0806006-9813-4ff2-b0a9-667035376ece";
+
+# $zimbra_limit_filter = "(objectclass=orgzimbraperson)";
+
+
+# Global Calendar settings.  ldap2zimbra can add a calendar share
+# to every user.
+# comment if you don't wish to share a calendar to all users
+# @global_cals = (
+#     { owner => "calendar-admin\@" . $zu->get_default_domain(),
+#       name  => "~Academic Calendar",
+#       path  => "/~Academic Calendar",
+#       exists => 0 },
+#     { owner => "calendar-pd\@" . $zu->get_default_domain(),
+#       name  => "~ProfDev Calendar",
+#       path => "/~ProfDev Calendar",
+#       exists => 0 }
+# );
+
+$z_params{z_url} = "https://" . $z_params{z_server} . ":7071/service/admin/soap/";
+
+
+# Defaults
+# max delete recurse depth -- how deep should we go before giving up
+# searching for users to delete:
+# 5 == aaaaa*
+$max_recurse = 15;
+# attributes that will not be looked up in ldap when building z2l hash
+# (see sub get_z2l() for more detail)
+@z2l_literals = qw/( )/;
+
+
+#$multi_domain_mode = 0; # use uid attribute and concat the domain provided by ldap2zimbra
+$in_multi_domain_mode = 1; # use mail attribute including the domain.
+
+
+
+$create_archives = 0;  # don't create archive accounts
+# $create_archives = 1; # create archive accounts
+# if this attribute is non-empty archive accounts will be named after this attribute.
+#
+#  Currently this is the only way archiving works--account creation
+#  will be skipped if $create_archives == 1 and $archive_name_attr is
+#  empty or not defined.
+# $archive_name_attr = "orgghrsintemplidno";
+
+
+# mapping of zimbra attributes to ldap attributes
+# to generate an attribute assign a pointer to a sub or 
+# $z2l = {
+#     "cn" =>                    ["cn"],
+#     "zimbrapreffromdisplay" => ["givenname", "sn"],
+#     "givenname" =>             ["givenname"],
+#     "sn" =>                    ["sn"],
+#     "company" =>               ["orghomeorg"],
+#     "st" =>                    ["orgworkstate"],
+#     "l" =>                     ["orgworkcity"],
+#     "postalcode" =>            ["orgworkzip"],
+
+#     "zimbramailhost" =>            \&build_org_zmailhost,
+#     "zimbraarchiveaccount" =>      \&build_archive_account,
+#     "amavisarchivequarantineto" => \&build_archive_account,
+#     "co" =>                        \&build_phone_fax,
+#     "street" =>                    \&build_address,
+#     "displayname" =>               \&build_last_first,
+#     "zimbrapreffromdisplay" =>     \&build_last_first,
+# };
+
+$z2l = {
+    "cn" =>                    ["cn"],
+    "zimbrapreffromdisplay" => ["givenname", "sn"],
+    "givenname" =>             ["givenname"],
+    "sn" =>                    ["sn"],
+    "zimbramailhost" => \&get_z_mailhost,
+#     "company" =>               ["orghomeorg"],
+#     "st" =>                    ["orgworkstate"],
+#     "l" =>                     ["orgworkcity"],
+#     "postalcode" =>            ["orgworkzip"],
+
+#     "zimbraarchiveaccount" =>      \&build_archive_account,
+#     "amavisarchivequarantineto" => \&build_archive_account,
+#     "co" =>                        \&build_phone_fax,
+#     "street" =>                    \&build_address,
+#     "displayname" =>               \&build_last_first,
+#     "zimbrapreffromdisplay" =>     \&build_last_first,
+};
+
+$archive_z2l = {
+    # TODO: add cn, givenname and sn here so a search by user's name shows the archive..
+    "zimbramailhost" => \&get_z_archive_mailhost,
+    "zimbracosid"    => \&get_archive_cos_id,
+};
+

@@ -9,6 +9,10 @@
 # One way sync: define attributes mastered by LDAP, sync them to
 # Zimbra.  attributes mastered by Zimbra do not go to LDAP.
 
+# download and install zimbra source code:
+# cd /usr/local
+# tar xf ~/zcs-5.0.2_GA_1975-src.tgz
+
 # TODO:
 #       check that writing tmp files failure doesn't cause all users to be deleted
 
@@ -30,23 +34,6 @@ BEGIN {
 # The Zimbra SOAP libraries.  Download and uncompress the Zimbra
 # source code to get them.
 use lib "/usr/local/zcs-5.0.2_GA_1975-src/ZimbraServer/src/perl/soap";
-
-# Number of processes to run simultaneously.
-# I've only had consistent success with <= 2. 
-# I suggest you test larger numbers for $parallelism and
-# $users_per_proc on a development system..
-my $parallelism = 2;
-# number of users to process per fork.  If this number is too low the
-# overhead of perl fork() can lock a Linux system solid.  I suggest
-# keeping this > 50.
-my $users_per_proc = 500;
-
-my $child_status_path=$script_dir . "/child_status";
-die "can't write to child status directory: $child_status_path"
-    if (! -w $child_status_path);
-
-#### End Site-specific settings
-#############################################################
 use strict;
 use Getopt::Std;
 use Data::Dumper;
@@ -93,6 +80,22 @@ my $usrs;
 my $parent_pid = $$;
 my $zu = new ZimbraUtil($parent_pid, %arg_h);
 
+# Number of processes to run simultaneously.
+# I've only had consistent success with <= 2. 
+# I suggest you test larger numbers for $parallelism and
+# $users_per_proc on a development system..
+my $parallelism = 2;
+# number of users to process per fork.  If this number is too low the
+# overhead of perl fork() can lock a Linux system solid.  I suggest
+# keeping this > 50.
+my $users_per_proc = 500;
+
+#my $child_status_path=$script_dir . "/child_status";
+
+my $child_status_path=$script_dir . "/" . $zu->get_relative_child_status_path();
+die "can't write to child status directory: $child_status_path"
+    if (! -w $child_status_path);
+
 print "-a used, archive accounts will be synced--".
     "this will almost double run time.\n"
     if (exists $opts{a});
@@ -122,10 +125,17 @@ for my $lusr (@ldap_entries) {
   	$usr = lc $lusr->get_value("uid") . "@" . $zu->get_z_domain()
     }
 
-    # if $usr is undefined or empty there is likely no mail attribute: 
-    # get the uid attribute and concatenate the default domain
-    $usr = $lusr->get_value("uid") . "@" . $zu->get_zimbra_domain()
-	if (!defined $usr || $usr =~ /^\s*$/);
+
+    # 110330, morgan: this won't work for multi-domain!
+#     # if $usr is undefined or empty there is likely no mail attribute: 
+#     # get the uid attribute and concatenate the default domain
+#     $usr = $lusr->get_value("uid") . "@" . $zu->get_zimbra_domain()
+# 	if (!defined $usr || $usr =~ /^\s*$/);
+    if (!defined $usr || $usr =~ /^\s*$/) {
+        print "no uid/mail value found!  Skipping: \n";
+        print Dumper $lusr;
+        next;
+    }
 
     # keep track of users as we work on them so we can decide who to
     # delete later on.
@@ -186,6 +196,9 @@ for my $lusr (@ldap_entries) {
 			if (exists $opts{d});
 		    ### check for a corresponding zimbra account
 		    my $zu_h = $zu->get_z_user($u);
+
+                    next unless ($zu->is_local_domain($u));
+
 		    if (!defined $zu_h) {
 			$zu->add_user($usrs->{$u}, *CHILD_WTR{IO});
 		    } else {
