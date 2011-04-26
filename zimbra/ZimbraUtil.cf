@@ -1,7 +1,5 @@
-use ZimbraUtil;
-
-#my $zu = new ZimbraUtil;
-
+# setup to run ldap2zimbra:
+# choose a non-root user.  Su to that user.  Root's okay but not necessary.
 # mkdir ldap2zimbra 
 # mkdir ldap2zimbra ldap2zimbra/log ldap2zimbra/child_status
 # cp run_ldap2zimbra.sh ldap2zimbra.pl ZimbraUtil.pm ZimbraUtil.cf ldap2zimbra
@@ -11,11 +9,20 @@ use ZimbraUtil;
 # tar xfz ~morgan/zcs-5.0.2_GA_1975-src.tgz
 # exit
 # yum install perl-XML-Parser perl-LDAP
+#  (need to get these from EPEL?)
 # ldap2zimbra/run_ldap2zimbra.sh -n
 # 
 
+# TODO: mailaltnernateaddresses!
 
-@zimbra_special = qw/admin galsync.* ham.* spam.* virus-quarantine.*/;
+use ZimbraUtil;
+# users who are special to zimbra, won't ever be modified or deleted
+@zimbra_special = qw/admin galsync.* ham.* spam.* virus-quarantine.* admin-calendar testuser.* notifylinkadmin/;
+
+# domains local to this zimbra install.  Often just one.  This list
+# must match your domain list in Zimbra or you will get errors adding
+# users as ldap2zimbra runs.
+
 @local_domains = qw/ext.domain.org cett.dc=domain,dc=org dafvm.dc=domain,dc=org srdc.domain.org/;
 
 # relative directory where files will be created to track children
@@ -24,12 +31,20 @@ use ZimbraUtil;
 #  directory and put its name here.
 $relative_child_status_path = "/child_status";
 
+#$multi_domain_mode = 0; # use uid attribute and concat the domain provided by ldap2zimbra
+$in_multi_domain_mode = 1; # use mail attribute including the domain.
+
+$create_archives = 0;  # don't create archive accounts
+# $create_archives = 1; # create archive accounts
+
 # ldap defaults
-# %l_params = (
+%l_params = (
 #     l_host => "ldap0.domain.org",
-#     l_binddn => "cn=directory manager",
-#     l_bindpass => "pass",
+     l_host => "atlas.ext.domain.org",
+     l_binddn => "cn=directory manager",
+     l_bindpass => "pass",
 #     l_base => "dc=domain,dc=org",
+     l_base => "o=msu_ag",
 #     # debugging:
 #     # l_filter = 
 #     #  "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
@@ -37,20 +52,8 @@ $relative_child_status_path = "/child_status";
 #     # l_filter = "(orghomeorgcd=9500)";
 #     # production:
 #     l_filter => "(objectclass=orgZimbraPerson)"
-# );
-
-$l_params{l_host} = "atlas.ext.domain.org";
-$l_params{l_binddn} = "cn=directory manager";
-$l_params{l_bindpass} = "pass.";
-$l_params{l_base} ="o=msu_ag";
-    # debugging:
-    # l_filter = 
-    #  "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
-    #    "(orghomeorgcd=9500)";
-    # l_filter = "(orghomeorgcd=9500)";
-    # production:
-#$l_params{l_filter} = "(objectclass=orgZimbraPerson)";
-$l_params{l_filter} = "(&(objectclass=inetMailUser)(maildeliveryoption=mailbox))";
+     l_filter => "(&(objectclass=inetMailUser)(maildeliveryoption=mailbox))",
+ );
 
 # rdn of the LDAP group containing accounts that will be excluded from ldap2zimbra
 #   processing.
@@ -58,39 +61,24 @@ $l_params{l_filter} = "(&(objectclass=inetMailUser)(maildeliveryoption=mailbox))
 $exclude_group_rdn = "";  # assumed to be in $ldap_base
 
 # Zimbra defaults
-# %z_params = (
+%z_params = (
 #     z_server => "dmail01.domain.org",
-#     z_pass => "pass",
-#     z_domain => "dev.domain.org",  # mail domain
-#     z_archive_mailhost => "dmail02.domain.org",
-#     z_archive_suffix => "archive",
+    z_server => "130.18.22.17",
+    z_pass => "pass",
+#    z_domain => "dev.domain.org",  # mail domain
+    z_domain => "dev.domain.org",  # mail domain, ignored if $in_multi_domain_mode == 1
+#    z_archive_mailhost => "dmail02.domain.org",
+# leave archive_mailhost blank if you do not use Zimbra Archiving
+    z_archive_mailhost => "",
+    z_archive_suffix => "archive",
 #     # TODO: look up cos by name instead of requiring the user enter the cos id.
 #     # production:
 #     # z_archive_cos_id => "249ef618-29d0-465e-86ae-3eb407b65540",
 #     # dev:
-#     z_archive_cos_id => "c0806006-9813-4ff2-b0a9-667035376ece",
+     z_archive_cos_id => "c0806006-9813-4ff2-b0a9-667035376ece"
+);
 
-# );
-
-#our %z_params;
-
-$z_params{z_server} = "130.18.22.17";
-$z_params{z_pass} = "pass";
-
-# TODO: relevant multi domain mode?
-$z_params{z_domain} = "",  # mail domain;
-
-# leave archive_mailhost blank if you do not use Zimbra Archiving
-$z_params{z_archive_mailhost} = "";
-$z_params{z_archive_suffix} = "archive";
-$z_params{z_archive_domain} = $z_params{z_domain} . "." . "archive";
-    # TODO: look up cos by name instead of requiring the user enter the cos id.
-    # production:
-    # z_archive_cos_id => "249ef618-29d0-465e-86ae-3eb407b65540",
-    # dev:
-$z_params{z_archive_cos_id} = "c0806006-9813-4ff2-b0a9-667035376ece";
-
-# $zimbra_limit_filter = "(objectclass=orgzimbraperson)";
+$z_params{z_archive_domain} =  $z_params{z_domain} . "." . $z_params{z_archive_suffix},
 
 
 # Global Calendar settings.  ldap2zimbra can add a calendar share
@@ -107,33 +95,41 @@ $z_params{z_archive_cos_id} = "c0806006-9813-4ff2-b0a9-667035376ece";
 #       exists => 0 }
 # );
 
+# TODO: figure out how to call get_default_domain() from ZimbraUtil.pm
+@global_cals = (
+     { owner => "admin-calendar\@ext.domain.org",
+       name  => "~University Holidays",
+       path  => "/~University Holidays",
+       exists => 0 },
+);
+
+
 $z_params{z_url} = "https://" . $z_params{z_server} . ":7071/service/admin/soap/";
 
 
 # Defaults
 # max delete recurse depth -- how deep should we go before giving up
-# searching for users to delete:
+
+# searching for users to delete.  If you have thousands of users in
+# Zimbra the libraries will throw an exception when we attemtp to get
+# a full list.  We have to break our search down by alphabet (a, b,
+# c.. aa, bb, cc etc) recursively.  Should the recursion get
+# infinitely deep we need to know when to stop.  5 is a little shallow
+# (many thousand restored_ accounts).  15 seems about right.
+
 # 5 == aaaaa*
 $max_recurse = 15;
+
 # attributes that will not be looked up in ldap when building z2l hash
 # (see sub get_z2l() for more detail)
 @z2l_literals = qw/( )/;
 
-
-#$multi_domain_mode = 0; # use uid attribute and concat the domain provided by ldap2zimbra
-$in_multi_domain_mode = 1; # use mail attribute including the domain.
-
-
-
-$create_archives = 0;  # don't create archive accounts
-# $create_archives = 1; # create archive accounts
+# TODO: make sure this is true.
 # if this attribute is non-empty archive accounts will be named after this attribute.
-#
 #  Currently this is the only way archiving works--account creation
 #  will be skipped if $create_archives == 1 and $archive_name_attr is
 #  empty or not defined.
 # $archive_name_attr = "orgghrsintemplidno";
-
 
 # mapping of zimbra attributes to ldap attributes
 # to generate an attribute assign a pointer to a sub or 
@@ -156,6 +152,13 @@ $create_archives = 0;  # don't create archive accounts
 #     "zimbrapreffromdisplay" =>     \&build_last_first,
 # };
 
+# map zimbra attributes (left hand side [lhs]) to ldap attributes
+# (right hand side [rhs]) anything prefaced with \& is a subroutine in
+# ZimbraUtil.  It does expect one argument.  See any of the examples
+# below.
+#
+# Two attributes in a list ref (["givenname", "sn"]) will be concatenated together with spaces in between.
+#
 $z2l = {
     "cn" =>                    ["cn"],
     "zimbrapreffromdisplay" => ["givenname", "sn"],
@@ -172,6 +175,7 @@ $z2l = {
 #     "co" =>                        \&build_phone_fax,
 #     "street" =>                    \&build_address,
 #     "displayname" =>               \&build_last_first,
+     "displayname" =>               ["givenname", "sn"],
 #     "zimbrapreffromdisplay" =>     \&build_last_first,
 };
 

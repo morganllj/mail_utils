@@ -6,12 +6,6 @@ package ZimbraUtil;
 #       generalize build_zmailhost()
 #       unbind ldap explicitely
 #
-# create calendar-admin, calendar-pd and associated calendars
-# create default_domain.archive
-# mkdir -p ldap2zimbra/child_status ldap2zimbra/log
-# make sure /usr/local/zcs-5.0.2_GA_1975-src is in place.
-# from RPMForge:
-# yum install perl-XML-Parser perl-LWP-UserAgent-Determined perl-LDAP
 
 use strict;
 #use lib "/usr/local/zcs-5.0.2_GA_1975-src/ZimbraServer/src/perl/soap";
@@ -22,38 +16,31 @@ use Soap;
 use Data::Dumper;
 use Net::LDAP;
 
-# pull in site-specific config
-
-
-# # Defaults
-# # max delete recurse depth -- how deep should we go before giving up
-# # searching for users to delete:
-# # 5 == aaaaa*
-# my $max_recurse = 15;
-# my $parent_pid;
-# my %subset;
-# my $ldap;
-# my @exclude_list;
-
+# global variables--modify in ZimbraUtil.cf
 our @zimbra_special;
 our @local_domains;
-
 our $max_recurse;
+our $relative_child_status_path;
+our $in_multi_domain_mode;
+our $create_archives;
+our @z2l_literals;
+our %l_params;
+our $exclude_group_rdn;
+our $z2l;
+our %z2l_archive;
+our %z_params;
+our @global_cals;
+
 my $parent_pid;
 my %subset;
 my $ldap;
 my @exclude_list;
-our $relative_child_status_path;
-our $in_multi_domain_mode;
 my $archive_name_attr;
-our $create_archives;
 my $archive_z2l;
+my $zimbra_limit_filter;  # TODO: how is this used?
+my $context;
 
-# # attributes that will not be looked up in ldap when building z2l hash
-# # (see sub get_z2l() for more detail)
-# my @z2l_literals = qw/( )/;
-our @z2l_literals;
-# has ref to store archive accounts that need to be sync'ed.
+# hash ref to store archive accounts that need to be sync'ed.
 my $archive_accts;
 # hash ref to store a list of users added/modified to extra users can
 # be deleted from zimbra.
@@ -64,81 +51,16 @@ my $MAILNS = "urn:zimbraAdmin";
 my $SOAP = $Soap::Soap12;
 my $url;
 
-# # ldap defaults
-our %l_params;
-# my %l_params = (
-#     l_host => "ldap0.domain.org",
-#     l_binddn => "cn=directory manager",
-#     l_bindpass => "pass",
-#     l_base => "dc=domain,dc=org",
-#     # debugging:
-#     # l_filter = 
-#     #  "(|(orghomeorgcd=9500)(orghomeorgcd=8020)(orghomeorgcd=5020))";
-#     #    "(orghomeorgcd=9500)";
-#     # l_filter = "(orghomeorgcd=9500)";
-#     # production:
-#     l_filter => "(objectclass=orgZimbraPerson)"
-# );
+my $cf_file = __PACKAGE__ . ".cf";
+require $cf_file || die "can't open $cf_file";
 
-# # rdn of the LDAP group containing accounts that will be excluded from ldap2zimbra
-# #   processing.
-# my $exclude_group_rdn = "cn=orgexcludes";  # assumed to be in $ldap_base
-our $exclude_group_rdn;
-
-our $z2l;
-our %z2l_archive;
-
-# # Zimbra defaults
-our %z_params;
-# my %z_params = (
-#     z_server => "dmail01.domain.org",
-#     z_pass => "pass",
-#     z_domain => "dev.domain.org",  # mail domain
-#     z_archive_mailhost => "dmail02.domain.org",
-#     z_archive_suffix => "archive",
-#     # TODO: look up cos by name instead of requiring the user enter the cos id.
-#     # production:
-#     # z_archive_cos_id => "249ef618-29d0-465e-86ae-3eb407b65540",
-#     # dev:
-#     z_archive_cos_id => "c0806006-9813-4ff2-b0a9-667035376ece",
-
-# );
-
-    my $cf_file = __PACKAGE__ . ".cf";
-    require $cf_file || die "can't open $cf_file";
-#    open (CF_IN, "ldap2zimbra/$cf_file") || die "can't open config $cf_file";
-
-
-# my $zimbra_limit_filter = "(objectclass=orgzimbraperson)";
-# my $context;
-# @z2l_literals = qw/( )/;
-my $zimbra_limit_filter;
-my $context;
-
-# # Global Calendar settings.  ldap2zimbra can a calendar shares
-# # to every user.
-our @global_cals;
-# my @global_cals = (
-#     { owner => "calendar-admin\@" . get_default_domain(),
-#       name  => "~Academic Calendar",
-#       path  => "/~Academic Calendar",
-#       exists => 0 },
-
-#     { owner => "calendar-pd\@" . get_default_domain(),
-#       name  => "~ProfDev Calendar",
-#       path => "/~ProfDev Calendar",
-#       exists => 0 }
-
-# );
-
-
-# $z_params{z_url} = "https://" . $z_params{z_server} . ":7071/service/admin/soap/";
-# $z_params{z_archive_domain} = $z_params{z_domain} . "." . "archive";
-
-# # general defaults
 my %g_params;
 
 
+
+
+# Top level public functions
+#####
 sub is_local_domain {
     shift if ((ref $_[0]) eq __PACKAGE__);
     my $lu = shift;
@@ -152,12 +74,11 @@ sub is_local_domain {
             if (lc $_ eq lc $d);
     }
 
-    print "skipping user in non-local domain: $lu\n";
+    print "\nskipping user in non-local domain: $lu\n";
     return 0;
 }
 
 
-# Top level public functions
 #####
 sub return_all_accounts {
     shift if ((ref $_[0]) eq __PACKAGE__);
@@ -173,7 +94,6 @@ sub rename_all_archives {
 
     return operate_on_user_list(func=>\&ooul_func_rename_archives, @_);
 }
-
 
 
 ######
@@ -197,12 +117,6 @@ sub new {
     my $class;
     my %args;
     ($class, $parent_pid, %args) = @_;
-
-
-
-#    my @cf = <CF_IN>;
-
-#    eval @cf;
 
     for my $k (keys %args) {
         if ($k =~ /^z_/) {
@@ -243,8 +157,6 @@ sub new {
 
     return $self;
 }
-
-
 
 
 sub init_ldap {
@@ -331,7 +243,6 @@ sub ooul_func_rename_archives($) {
         }
         
         # get internal employee id from ldap
-
         my $int_empl_id;
         if (exists $args{attr_frm_ldap}) {
             $int_empl_id = $lusr->get_value($args{attr_frm_ldap});
@@ -343,7 +254,9 @@ sub ooul_func_rename_archives($) {
             print "\nwarning, amavisarchivequarantineto and zimbraarchiveaccount ".
                 "don't match for $uid:\n";
             print $amavis_to . " vs. ". $archive. "\n";
-            #TODO: do something?
+            #TODO: do something?  This is actually okay.. one is the
+            #current archive, the other is past and perhaps also
+            #current archive(s).
         }
         
         if (!defined $archive) {
@@ -428,9 +341,19 @@ sub get_zimbra_usrs_frm_ldap {
     my $fil = $l_params{l_filter};
 
     if (exists $l_params{l_subset}) {
+
+#        for my $u (split /\s*,\s*/, $l_params{l_subset}) {$subset{lc $u} = 1;}
+#        print "\nlimiting to subset of users:\n", join (', ', keys %subset), "\n";
+#        $fil = "(&" . $fil . "(|(uid=" . join (')(uid=', keys %subset) . ")))";
+
         for my $u (split /\s*,\s*/, $l_params{l_subset}) {$subset{lc $u} = 1;}
         print "\nlimiting to subset of users:\n", join (', ', keys %subset), "\n";
-        $fil = "(&" . $fil . "(|(uid=" . join (')(uid=', keys %subset) . ")))";
+
+        if (in_multi_domain_mode()) {
+            $fil = "(&" . $fil . "(|(mail=" . join (')(mail=', keys %subset) . ")))";
+        } else {
+            $fil = "(&" . $fil . "(|(uid=" . join (')(uid=', keys %subset) . ")))";
+        }
     }
 
     print "getting user list from ldap: $fil\n";
@@ -478,7 +401,6 @@ sub in_exclude_list($) {
     return 0 if (!defined $exclude_group_rdn || $exclude_group_rdn =~ /^\s*$/);
     
     for my $ex (@exclude_list) {
-#	unless ($g_params{multi_domain_mode}) {
 	unless (in_multi_domain_mode()) {
 	    $ex = (split(/\@/, $ex))[0];
 	    $u  = (split(/\@/, $u))[0];
@@ -496,26 +418,32 @@ sub in_exclude_list($) {
 sub in_multi_domain_mode {
     shift if ((ref $_[0]) eq __PACKAGE__);
 
-#    return 1 if ($g_params{multi_domain_mode});
-#    return 0;
     return $in_multi_domain_mode;
+    # TODO?
+    # unless (in_multi_domain_mode()) {
 }
 
 
 #########
 sub in_subset {
     shift if ((ref $_[0]) eq __PACKAGE__);
+    my @mail = @_;
 
-    my $u = shift;
+#     my $u = shift;
 
-    my $username;
-    if ($u =~ /@/) {
-        $username = (split /\@/, $u)[0];
+#     my $username;
+#     if ($u =~ /@/) {
+#         $username = (split /\@/, $u)[0];
+#     }
+
+#     return 1
+#         if (!%subset || ((exists $subset{$u}) ||
+#                         (defined $username && exists $subset{$username})));
+    return 1 if (!%subset);
+
+    for my $m (@mail) {
+        return 1 if (exists $subset{lc $m});
     }
-
-    return 1
-        if (!%subset || ((exists $subset{$u}) ||
-                        (defined $username && exists $subset{$username})));
 
     return 0;
 }
@@ -620,10 +548,9 @@ sub add_user {
     $d->start('CreateAccountRequest', $MAILNS);
 #    $d->add('name', $MAILNS, undef, $lu->get_value("uid")."@".$z_params{z_domain});
     my $an;
-    if (in_multi_domain_mode) {
+    if (in_multi_domain_mode()) {
         $an = $lu->get_value("mail");
     } else {
-#        $an = $lu->get_value("uid")."@".$z_params{z_domain}
         $an = $lu->get_value("uid")."@".get_z_domain();
     }
     $d->add('name', $MAILNS, undef,$an);
@@ -1371,12 +1298,46 @@ sub delete_in_range {
 
 
 sub is_zimbra_special {
-    my $u = shift;
+    shift if ((ref $_[0]) eq __PACKAGE__);
+    my @mail = @_;
 
-    for (@zimbra_special) {
-        return 1 if $u =~ /^$_$/;
+#     for (@zimbra_special) {
+#         return 1 if $u =~ /^$_$/;
+#     }
+
+    for my $zs (@zimbra_special) {
+        for my $m (@mail) {
+            $m = (split /\@/, $m)[0]
+                if ($m =~ /\@/);
+            return 1 if $m =~ /^$zs$/;
+        }
     }
 
+    return 0;
+}
+
+#######
+sub in_all_users(@) {
+    shift if ((ref $_[0]) eq __PACKAGE__);
+    my @mail = @_;
+
+    for my $m (@mail) {
+        return 1 if exists $all_users->{$m};
+    }
+    
+    return 0;
+}
+
+
+#######
+sub is_archive_acct(@) {
+    shift if ((ref $_[0]) eq __PACKAGE__);
+    my @mail = @_;
+
+    for my $m (@mail) {
+        return 1 if ($m =~ /archive\s*$/i);
+    }
+    
     return 0;
 }
 
@@ -1394,9 +1355,7 @@ sub parse_and_del($) {
 	    $uid = $attr->content()
 		if ((values %{$attr->attrs()})[0] eq "uid");
 
-# 	    $mail = $attr->content()
-# 		if ((values %{$attr->attrs()})[0] eq "mail");
-
+            # multiple mail aliases
             push @mail, $attr->content()
                 if ((values %{$attr->attrs()})[0] eq "mail");
 
@@ -1405,39 +1364,54 @@ sub parse_and_del($) {
  	}
 
 	# skip special users
+        # TODO: what about multidomain mode?
         if (in_exclude_list($uid)) {
 	    print "\tskipping special user $uid\n"
 		if (exists $g_params{g_debug});
 	    next;
 	}
 
-        # If there are multiple mail attributes all but one are
-        # aliases.  Get the mail attribute that correlates to the uid.
-        my $mail;
-        for my $m (@mail) {
-            my $work_m = (split /@/, $m)[0];
-            $mail = $m
-                if ($uid eq $work_m);
+
+# 110421, morgan: this won't work for users who have the same address at multiple domains:
+#     mail: morgan@thisdomain.com
+#     mail: morgan@thatdomain.com
+#         # If there are multiple mail attributes all but one are
+#         # aliases.  Get the mail attribute that correlates to the uid.
+#         my $mail;
+#         for my $m (@mail) {
+#             my $work_m = (split /@/, $m)[0];
+#             $mail = $m
+#                 if ($uid eq $work_m);
+#         }
+
+        next if in_all_users(@mail);
+        
+#  	if (defined $mail && defined $z_id && 
+# 	    !exists $all_users->{$mail}) {
+
+#             print "selected $mail from ", join ' ', @mail, "\n"
+#                 if ($#mail > 0);
+
+#             if (exists $g_params{g_dont_delete_archives} && $mail =~ /archive\s*$/i) {
+#                 print "\tnot deleting archive: $mail\n";
+#                 next;
+#             }
+
+        if (exists $g_params{g_dont_delete_archives} && is_archive_acct(@mail)) {
+            print "\tnot deleting archive: $uid, ", join ' ', @mail, "\n";
+            next;
         }
 
-#         print "selected $mail from ", join ' ', @mail, "\n"
-#             if ($#mail > 0);
-
- 	if (defined $mail && defined $z_id && 
-	    !exists $all_users->{$mail}) {
-
-            if (exists $g_params{g_dont_delete_archives} && $mail =~ /archive\s*$/i) {
-                print "\tnot deleting archive: $mail\n";
-                next;
-            }
-
-            next if (is_zimbra_special($uid));
-
-            next unless (in_subset($uid) || 
-                         in_subset($mail));
+#        next if (is_zimbra_special($uid));
+        next if (is_zimbra_special(@mail));
+    
+#        next unless (in_subset($uid) || 
+#                         in_subset($mail));
+        next unless in_subset(@mail);
 
 
-	    print "deleting $mail..\n";
+#	    print "deleting $mail..\n";
+        print "\ndeleting $uid, ", join ' ', @mail, "\n";
 
  	    my $d = new XmlDoc;
  	    $d->start('DeleteAccountRequest', $MAILNS);
@@ -1453,7 +1427,7 @@ sub parse_and_del($) {
 		    print $o."\n";
 		}
 	    }
-	}
+#	}
     }
 }
 
@@ -1542,34 +1516,10 @@ sub get_z2l($) {
     # zimbracosid
 
     if (defined $type && $type eq "archive") {
-# 	$z2l = {
-#             # TODO: add cn, givenname and sn here so a search by user's name shows the archive..
-# 	    "zimbramailhost" => \&get_z_archive_mailhost,
-# 	    "zimbracosid"    => \&get_archive_cos_id,
-# 	};
         return $archive_z2l;
     } elsif (defined $type) {
 	die "unknown type $type received in get_z2l.. ";
     } else {
-# 	$z2l = {
-# 	    "cn" =>                    ["cn"],
-# 	    "zimbrapreffromdisplay" => ["givenname", "sn"],
-# 	    "givenname" =>             ["givenname"],
-# 	    "sn" =>                    ["sn"],
-# 	    "company" =>               ["orghomeorg"],
-# 	    "st" =>                    ["orgworkstate"],
-# 	    "l" =>                     ["orgworkcity"],
-# 	    "postalcode" =>            ["orgworkzip"],
-
-# 	    "zimbramailhost" =>            \&build_zmailhost,
-# 	    "zimbraarchiveaccount" =>      \&build_archive_account,
-# 	    "amavisarchivequarantineto" => \&build_archive_account,
-# 	    "co" =>                        \&build_phone_fax,
-# 	    "street" =>                    \&build_address,
-# 	    "displayname" =>               \&build_last_first,
-#             "zimbrapreffromdisplay" =>     \&build_last_first,
-# 	};
-        
         return $z2l;
     }
 
@@ -1638,7 +1588,6 @@ sub build_archive_account($) {
     shift if ((ref $_[0]) eq __PACKAGE__);
     my $lu = shift;
 
-#    return $lu->get_value("orgghrsintemplidno")."\@".$z_params{z_domain}.".".$z_params{z_archive_suffix};
     return $lu->get_value("orgghrsintemplidno")."\@".get_z_domain().".".$z_params{z_archive_suffix};
 }
 
@@ -1646,6 +1595,8 @@ sub build_archive_account($) {
 sub get_z_mailhost($) {
     shift if ((ref $_[0]) eq __PACKAGE__);
     my $lu = shift;
+
+    # TODO: generalize this sub!
 
     return "hercules.ext.domain.org";
 
@@ -1777,14 +1728,20 @@ sub delete_not_in_ldap() {
         return;
     }
 
+    print "\ndelete phase..", `date`;
+
     my $r;
     my $d = new XmlDoc;
     
     $d->start('SearchDirectoryRequest', $MAILNS,
-#          {'sortBy' => "uid", 'attrs'  => "uid", 'types'  => "accounts"});
           {'types'  => "accounts"});
     if (exists $l_params{l_subset}) {
-        my $fil = "(|(uid=" . join (')(uid=', keys %subset) . "))";
+        my $fil;
+        if (in_multi_domain_mode()) {
+            $fil = "(|(mail=" . join (')(mail=', keys %subset) . "))";
+        } else {
+            $fil = "(|(uid=" . join (')(uid=', keys %subset) . "))";
+        }
         # commented 110412, I'm pretty sure it was a mistake.
 #        my $fil = "(|(uid=m*)(uid=" . join (')(uid=', keys %subset) . "))";
         print "using subset filter: $fil\n";
@@ -1896,7 +1853,6 @@ sub get_fault_reason {
       }
       
       my $new_auth_token = $r->find_child('authToken')->content;
-#      my $new_context = $SOAP->zimbraContext($new_auth_token, $sessionId);
       my $new_context = $SOAP->zimbraContext($new_auth_token, undef);
 
       # Compare user calendars with defined calendars
@@ -1957,7 +1913,7 @@ sub get_fault_reason {
 
 { my %cached_cals;
 
-# there are three things cal_exists() checks:
+# cal_exists() checks:
 # if just $acct and $cal check for a calendar named $cal
 # if $acct, $cal and $owner 
 #      check in $owner for a cal with an id that matches an rid in $acct.
@@ -2169,8 +2125,6 @@ sub delete_cal {
     }
 
     my $new_auth_token = $r->find_child('authToken')->content;
-
-#    my $new_context = $SOAP->zimbraContext($new_auth_token, $sessionId);
     my $new_context = $SOAP->zimbraContext($new_auth_token, undef);
 
     # Get all calendar mounts for the user
