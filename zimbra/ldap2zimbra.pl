@@ -6,17 +6,11 @@
 # Search an enterprise ldap and add/sync/delete users to a Zimbra
 # infrastructure
 #
-# One way sync: define attributes mastered by LDAP, sync them to
+# This is a one way sync: define attributes mastered by LDAP, sync them to
 # Zimbra.  attributes mastered by Zimbra do not go to LDAP.
+# See ZimbraUtil.cf for customization for your environment.
 
-# download and install zimbra source code:
-# cd /usr/local
-# tar xf ~/zcs-5.0.2_GA_1975-src.tgz
-
-# TODO:
-#       check that writing tmp files failure doesn't cause all users to be deleted
-
-# *****************************
+#######
 my $script_dir;
 BEGIN {
     # get the current working directory from $0 and add it to @INC so 
@@ -33,7 +27,8 @@ BEGIN {
 #
 # The Zimbra SOAP libraries.  Download and uncompress the Zimbra
 # source code to get them.
-use lib "/usr/local/zcs-5.0.2_GA_1975-src/ZimbraServer/src/perl/soap";
+use lib "/usr/local/zcs-6.0.7_GA_2483-src/ZimbraServer/src/perl/soap";
+
 use strict;
 use Getopt::Std;
 use Data::Dumper;

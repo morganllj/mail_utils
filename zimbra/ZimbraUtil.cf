@@ -1,34 +1,37 @@
 # setup to run ldap2zimbra:
-# choose a non-root user.  Su to that user.  Root's okay but not necessary.
-# mkdir ldap2zimbra 
-# mkdir ldap2zimbra ldap2zimbra/log ldap2zimbra/child_status
+# choose a user.  Su to that user.  Root's okay but not necessary.
+# mkdir -p ldap2zimbra/log ldap2zimbra/child_status
 # cp run_ldap2zimbra.sh ldap2zimbra.pl ZimbraUtil.pm ZimbraUtil.cf ldap2zimbra
-# chmod 700 ldap2zimbra/ldap2zimbra.pl ldap2zimbra/run_ldap2zimbra.sh
+# cd ldap2zimbra
+# chmod 700 ldap2zimbra.pl run_ldap2zimbra.sh
+# vi run_ldap2zimbra.sh
+#   Change bin_path if ldap2zimbra is in a directory other than 'ldap2zimbra.'
+#   Change default parameters to ldap2zimbra.pl if you like.  
 # su
 # cd /usr/local
-# tar xfz ~morgan/zcs-5.0.2_GA_1975-src.tgz
-# exit
+# tar xfz ~/zcs-6.0.7_GA_2483-src.tgz
 # yum install perl-XML-Parser perl-LDAP
 #  (need to get these from EPEL?)
 # ldap2zimbra/run_ldap2zimbra.sh -n
 # 
 
-# TODO: mailaltnernateaddresses!
+# TODO: mailalternateaddresses!
 
 use ZimbraUtil;
 # users who are special to zimbra, won't ever be modified or deleted
 @zimbra_special = qw/admin galsync.* ham.* spam.* virus-quarantine.* admin-calendar testuser.* notifylinkadmin/;
 
-# domains local to this zimbra install.  Often just one.  This list
+# domains local to this zimbra install.  Often just one but can be many.  This list
 # must match your domain list in Zimbra or you will get errors adding
 # users as ldap2zimbra runs.
-
 @local_domains = qw/ext.domain.org cett.dc=domain,dc=org dafvm.dc=domain,dc=org srdc.domain.org/;
 
 # relative directory where files will be created to track children
 #  process while script runs.  If ldap2zimbra.pl is in a directory
-#  called "ldap2zimbra," you'll need to create a directory within that
-#  directory and put its name here.
+#  called "ldap2zimbra" you'll need to create a directory within that
+#  directory and put its name here.  This is to work around problems
+#  with IPC in Perl.  I'm not thrilled about it but it does work
+#  reliably.
 $relative_child_status_path = "/child_status";
 
 #$multi_domain_mode = 0; # use uid attribute and concat the domain provided by ldap2zimbra
@@ -39,11 +42,9 @@ $create_archives = 0;  # don't create archive accounts
 
 # ldap defaults
 %l_params = (
-#     l_host => "ldap0.domain.org",
      l_host => "atlas.ext.domain.org",
      l_binddn => "cn=directory manager",
      l_bindpass => "pass",
-#     l_base => "dc=domain,dc=org",
      l_base => "o=msu_ag",
 #     # debugging:
 #     # l_filter = 
@@ -57,15 +58,13 @@ $create_archives = 0;  # don't create archive accounts
 
 # rdn of the LDAP group containing accounts that will be excluded from ldap2zimbra
 #   processing.
-# leave blank to include all users
+# leave blank if you don't want to exclude 
 $exclude_group_rdn = "";  # assumed to be in $ldap_base
 
 # Zimbra defaults
 %z_params = (
-#     z_server => "dmail01.domain.org",
     z_server => "130.18.22.17",
     z_pass => "pass",
-#    z_domain => "dev.domain.org",  # mail domain
     z_domain => "dev.domain.org",  # mail domain, ignored if $in_multi_domain_mode == 1
 #    z_archive_mailhost => "dmail02.domain.org",
 # leave archive_mailhost blank if you do not use Zimbra Archiving
@@ -80,6 +79,12 @@ $exclude_group_rdn = "";  # assumed to be in $ldap_base
 
 $z_params{z_archive_domain} =  $z_params{z_domain} . "." . $z_params{z_archive_suffix},
 
+# TODO: make sure this is true.
+# if this attribute is non-empty archive accounts will be named after this attribute.
+#  Currently this is the only way archiving works--account creation
+#  will be skipped if $create_archives == 1 and $archive_name_attr is
+#  empty or not defined.
+# $archive_name_attr = "orgghrsintemplidno";
 
 # Global Calendar settings.  ldap2zimbra can add a calendar share
 # to every user.
@@ -107,7 +112,6 @@ $z_params{z_archive_domain} =  $z_params{z_domain} . "." . $z_params{z_archive_s
 $z_params{z_url} = "https://" . $z_params{z_server} . ":7071/service/admin/soap/";
 
 
-# Defaults
 # max delete recurse depth -- how deep should we go before giving up
 
 # searching for users to delete.  If you have thousands of users in
@@ -124,15 +128,13 @@ $max_recurse = 15;
 # (see sub get_z2l() for more detail)
 @z2l_literals = qw/( )/;
 
-# TODO: make sure this is true.
-# if this attribute is non-empty archive accounts will be named after this attribute.
-#  Currently this is the only way archiving works--account creation
-#  will be skipped if $create_archives == 1 and $archive_name_attr is
-#  empty or not defined.
-# $archive_name_attr = "orgghrsintemplidno";
 
-# mapping of zimbra attributes to ldap attributes
-# to generate an attribute assign a pointer to a sub or 
+# map zimbra attributes (left hand side [lhs]) to ldap attributes
+# (right hand side [rhs]) anything prefaced with \& is a subroutine in
+# ZimbraUtil.  It does expect one argument.  See any of the examples
+# below.
+#
+# Two attributes in a list ref (["givenname", "sn"]) will be concatenated together with spaces in between.
 # $z2l = {
 #     "cn" =>                    ["cn"],
 #     "zimbrapreffromdisplay" => ["givenname", "sn"],
@@ -152,31 +154,13 @@ $max_recurse = 15;
 #     "zimbrapreffromdisplay" =>     \&build_last_first,
 # };
 
-# map zimbra attributes (left hand side [lhs]) to ldap attributes
-# (right hand side [rhs]) anything prefaced with \& is a subroutine in
-# ZimbraUtil.  It does expect one argument.  See any of the examples
-# below.
-#
-# Two attributes in a list ref (["givenname", "sn"]) will be concatenated together with spaces in between.
-#
 $z2l = {
     "cn" =>                    ["cn"],
     "zimbrapreffromdisplay" => ["givenname", "sn"],
     "givenname" =>             ["givenname"],
     "sn" =>                    ["sn"],
-    "zimbramailhost" => \&get_z_mailhost,
-#     "company" =>               ["orghomeorg"],
-#     "st" =>                    ["orgworkstate"],
-#     "l" =>                     ["orgworkcity"],
-#     "postalcode" =>            ["orgworkzip"],
-
-#     "zimbraarchiveaccount" =>      \&build_archive_account,
-#     "amavisarchivequarantineto" => \&build_archive_account,
-#     "co" =>                        \&build_phone_fax,
-#     "street" =>                    \&build_address,
-#     "displayname" =>               \&build_last_first,
-     "displayname" =>               ["givenname", "sn"],
-#     "zimbrapreffromdisplay" =>     \&build_last_first,
+    "zimbramailhost" =>        \&get_z_mailhost,
+     "displayname" =>          ["givenname", "sn"],
 };
 
 $archive_z2l = {

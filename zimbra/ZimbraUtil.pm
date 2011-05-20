@@ -8,8 +8,6 @@ package ZimbraUtil;
 #
 
 use strict;
-#use lib "/usr/local/zcs-5.0.2_GA_1975-src/ZimbraServer/src/perl/soap";
-use lib "/usr/local/zcs-6.0.7_GA_2483-src/ZimbraServer/src/perl/soap";
 use XmlElement;
 use XmlDoc;
 use Soap;
@@ -341,11 +339,6 @@ sub get_zimbra_usrs_frm_ldap {
     my $fil = $l_params{l_filter};
 
     if (exists $l_params{l_subset}) {
-
-#        for my $u (split /\s*,\s*/, $l_params{l_subset}) {$subset{lc $u} = 1;}
-#        print "\nlimiting to subset of users:\n", join (', ', keys %subset), "\n";
-#        $fil = "(&" . $fil . "(|(uid=" . join (')(uid=', keys %subset) . ")))";
-
         for my $u (split /\s*,\s*/, $l_params{l_subset}) {$subset{lc $u} = 1;}
         print "\nlimiting to subset of users:\n", join (', ', keys %subset), "\n";
 
@@ -429,16 +422,6 @@ sub in_subset {
     shift if ((ref $_[0]) eq __PACKAGE__);
     my @mail = @_;
 
-#     my $u = shift;
-
-#     my $username;
-#     if ($u =~ /@/) {
-#         $username = (split /\@/, $u)[0];
-#     }
-
-#     return 1
-#         if (!%subset || ((exists $subset{$u}) ||
-#                         (defined $username && exists $subset{$username})));
     return 1 if (!%subset);
 
     for my $m (@mail) {
@@ -546,7 +529,6 @@ sub add_user {
 
     my $d = new XmlDoc;
     $d->start('CreateAccountRequest', $MAILNS);
-#    $d->add('name', $MAILNS, undef, $lu->get_value("uid")."@".$z_params{z_domain});
     my $an;
     if (in_multi_domain_mode()) {
         $an = $lu->get_value("mail");
@@ -893,7 +875,6 @@ sub operate_on_range {
 
 		}
 
-		# push @l, get_list_in_range ($prfx2pass, $beg, $end);
                 push @l, operate_on_range ($prfx2pass, $beg, $end, $func, %args);
 		decrement_del_recurse();
 	    } else {
@@ -1301,10 +1282,6 @@ sub is_zimbra_special {
     shift if ((ref $_[0]) eq __PACKAGE__);
     my @mail = @_;
 
-#     for (@zimbra_special) {
-#         return 1 if $u =~ /^$_$/;
-#     }
-
     for my $zs (@zimbra_special) {
         for my $m (@mail) {
             $m = (split /\@/, $m)[0]
@@ -1371,63 +1348,33 @@ sub parse_and_del($) {
 	    next;
 	}
 
-
-# 110421, morgan: this won't work for users who have the same address at multiple domains:
-#     mail: morgan@thisdomain.com
-#     mail: morgan@thatdomain.com
-#         # If there are multiple mail attributes all but one are
-#         # aliases.  Get the mail attribute that correlates to the uid.
-#         my $mail;
-#         for my $m (@mail) {
-#             my $work_m = (split /@/, $m)[0];
-#             $mail = $m
-#                 if ($uid eq $work_m);
-#         }
-
         next if in_all_users(@mail);
         
-#  	if (defined $mail && defined $z_id && 
-# 	    !exists $all_users->{$mail}) {
-
-#             print "selected $mail from ", join ' ', @mail, "\n"
-#                 if ($#mail > 0);
-
-#             if (exists $g_params{g_dont_delete_archives} && $mail =~ /archive\s*$/i) {
-#                 print "\tnot deleting archive: $mail\n";
-#                 next;
-#             }
-
         if (exists $g_params{g_dont_delete_archives} && is_archive_acct(@mail)) {
             print "\tnot deleting archive: $uid, ", join ' ', @mail, "\n";
             next;
         }
 
-#        next if (is_zimbra_special($uid));
         next if (is_zimbra_special(@mail));
     
-#        next unless (in_subset($uid) || 
-#                         in_subset($mail));
         next unless in_subset(@mail);
 
-
-#	    print "deleting $mail..\n";
         print "\ndeleting $uid, ", join ' ', @mail, "\n";
 
- 	    my $d = new XmlDoc;
- 	    $d->start('DeleteAccountRequest', $MAILNS);
- 	    $d->add('id', $MAILNS, undef, $z_id);
- 	    $d->end();
+        my $d = new XmlDoc;
+        $d->start('DeleteAccountRequest', $MAILNS);
+        $d->add('id', $MAILNS, undef, $z_id);
+        $d->end();
 
- 	    if (!exists $g_params{g_printonly}){
-		my $r = check_context_invoke($d, \$context);
+        if (!exists $g_params{g_printonly}) {
+            my $r = check_context_invoke($d, \$context);
 
-		if (exists $g_params{g_debug}) {
-		    my $o = $r->to_string("pretty");
-		    $o =~ s/ns0\://g;
-		    print $o."\n";
-		}
-	    }
-#	}
+            if (exists $g_params{g_debug}) {
+                my $o = $r->to_string("pretty");
+                $o =~ s/ns0\://g;
+                print $o."\n";
+            }
+        }
     }
 }
 
@@ -1459,17 +1406,6 @@ sub get_z_archive_mailhost($) {
 
     return $z_params{z_archive_mailhost};
 }
-
-
-
-
-
-
-
-
-
-
-
 
 
 
