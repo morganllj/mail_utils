@@ -80,6 +80,7 @@ my $zu = new ZimbraUtil($parent_pid, %arg_h);
 # I suggest you test larger numbers for $parallelism and
 # $users_per_proc on a development system..
 my $parallelism = 2;
+
 # number of users to process per fork.  If this number is too low the
 # overhead of perl fork() can lock a Linux system solid.  I suggest
 # keeping this > 50.
@@ -119,7 +120,6 @@ for my $lusr (@ldap_entries) {
     } else {
   	$usr = lc $lusr->get_value("uid") . "@" . $zu->get_z_domain()
     }
-
 
     # 110330, morgan: this won't work for multi-domain!
 #     # if $usr is undefined or empty there is likely no mail attribute: 
@@ -161,7 +161,7 @@ for my $lusr (@ldap_entries) {
 
     my $proc_running = 0;  # indicates a process has been started.
     my $pidcount = 0;      # number of running processes.
-    
+
     do {
 	$pidcount = keys %$pids;
 

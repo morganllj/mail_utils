@@ -33,7 +33,7 @@ my $parent_pid;
 my %subset;
 my $ldap;
 my @exclude_list;
-my $archive_name_attr;
+our $archive_name_attr;
 my $archive_z2l;
 my $zimbra_limit_filter;  # TODO: how is this used?
 my $context;
@@ -339,13 +339,22 @@ sub get_zimbra_usrs_frm_ldap {
     my $fil = $l_params{l_filter};
 
     if (exists $l_params{l_subset}) {
-        for my $u (split /\s*,\s*/, $l_params{l_subset}) {$subset{lc $u} = 1;}
+        for my $u (split /\s*,\s*/, $l_params{l_subset}) {
+            if (!in_multi_domain_mode()) {
+                $u .= "@".get_z_domain()
+                    if ($u !~ /\@/);
+            }
+            $subset{lc $u} = 1;
+        }
         print "\nlimiting to subset of users:\n", join (', ', keys %subset), "\n";
 
         if (in_multi_domain_mode()) {
             $fil = "(&" . $fil . "(|(mail=" . join (')(mail=', keys %subset) . ")))";
         } else {
-            $fil = "(&" . $fil . "(|(uid=" . join (')(uid=', keys %subset) . ")))";
+            #            $fil = "(&" . $fil . "(|(uid=" . join (')(uid=', keys %subset) . ")))";
+            my @k = keys %subset;
+            for (@k) { s/@.*//; }
+            $fil = "(&" . $fil . "(|(uid=" . join (')(uid=', @k) . ")))";
         }
     }
 
@@ -521,7 +530,8 @@ sub add_user {
     # TODO: define a 'required' attribute in user definable section above.
 #    unless (defined build_target_z_value($lu, "orgghrsintemplidno", $z2l)) {
     if ($create_archives) {
-        unless (defined build_target_z_value($lu, $archive_name_attr, $z2l)) {
+#        unless (defined build_target_z_value($lu, $archive_name_attr, $z2l)) {
+        unless (defined build_target_z_value($archive_name_attr, $z2l, $lu)) {
             print "\t***no $archive_name_attr ldap attribute.  Archives can't be created.  Not adding.\n";
             return;
         }
@@ -538,7 +548,8 @@ sub add_user {
     $d->add('name', $MAILNS, undef,$an);
 
     for my $zattr (sort keys %$z2l) {
-	my $v = build_target_z_value($lu, $zattr, $z2l);
+#	my $v = build_target_z_value($lu, $zattr, $z2l);
+	my $v = build_target_z_value($zattr, $z2l, $lu);
 
 	if (!defined($v)) {
 	    print "unable to build value for $zattr, skipping..\n"
@@ -678,7 +689,8 @@ sub add_archive_acct {
     for my $zattr (sort keys %$z2l) {
 	my $v;
 
-	$v = build_target_z_value($lu, $zattr, $z2l);
+#	$v = build_target_z_value($lu, $zattr, $z2l);
+	$v = build_target_z_value($zattr, $z2l, $lu);
 
 	if (!defined($v)) {
 	    print "ERROR: unable to build value for $zattr, skipping..\n";
@@ -717,13 +729,22 @@ sub add_archive_acct {
 
 
 ######
-sub build_target_z_value($$$) {
+#sub build_target_z_value($$$) {
+sub build_target_z_value {
     shift if ((ref $_[0]) eq __PACKAGE__);
-    my ($lu, $zattr, $z2l) = @_;
+#    my ($lu, $zattr, $z2l) = @_;
+    my ($zattr, $z2l, $lu, $zu) = @_;
 
+    # $zu is only defined if called from a modify (vs an add).  The rest need to be defined.
+    return undef unless (defined $lu && defined $zattr && defined $z2l);
+    
     my $t = ref($z2l->{$zattr});
     if ($t eq "CODE") {
-	return &{$z2l->{$zattr}}($lu);
+        if (defined $zu) {
+            return &{$z2l->{$zattr}}($lu, $zu);
+        } else {
+            return &{$z2l->{$zattr}}($lu);
+        }
     }
 
     my $ret = join ' ', (
@@ -1109,7 +1130,8 @@ sub find_and_apply_user_diffs {
 	    $l_val_str = $z_params{z_archive_mailhost};
 	} else {
 	    # build the values from ldap using zimbra capitalization
-	    $l_val_str = build_target_z_value($lu, $zattr, $z2l);
+#	    $l_val_str = build_target_z_value($lu, $zattr, $z2l);
+	    $l_val_str = build_target_z_value($zattr, $z2l, $lu, $zuser);
 
 	    if (!defined($l_val_str)) {
 		print "unable to build value for $zattr, skipping..\n"
@@ -1407,8 +1429,10 @@ sub get_z_archive_mailhost($) {
     return $z_params{z_archive_mailhost};
 }
 
-
-
+#######
+sub return_string($) {
+    return shift;
+}
 
 #######
 sub get_z2l($) {
@@ -1527,58 +1551,67 @@ sub build_archive_account($) {
     return $lu->get_value("orgghrsintemplidno")."\@".get_z_domain().".".$z_params{z_archive_suffix};
 }
 
+
+
+sub build_split_domain_zmailtransport {
+    shift if ((ref $_[0]) eq __PACKAGE__);
+    my ($lu, $zu) = @_;
+
+    return "smtp:smtp.domain.org:25"
+        if (!exists ($zu->{zimbramailtransport}));
+
+    return (@{$zu->{zimbramailtransport}})[0];
+}
+
+
 ######
-sub get_z_mailhost($) {
+sub build_org_zmailhost($) {
     shift if ((ref $_[0]) eq __PACKAGE__);
     my $lu = shift;
 
-    # TODO: generalize this sub!
+    my $org_id = $lu->get_value("orgghrsintemplidno");
 
-    return "hercules.ext.domain.org";
+    if (!defined $org_id) {
+	print "WARNING! undefined SDP id, zimbraMailHost will be undefined\n";
+	return undef;
+    }
 
-#     my $org_id = $lu->get_value("orgghrsintemplidno");
+    my @i = split //, $org_id;
+    my $n = pop @i;
 
-#     if (!defined $org_id) {
-# 	print "WARNING! undefined SDP id, zimbraMailHost will be undefined\n";
-# 	return undef;
-#     }
-
-#     my @i = split //, $org_id;
-#     my $n = pop @i;
-
-#     # TODO: revisit!  Add provisions for dmail02 and unknown domain
-#     if (get_z_domain() eq "domain.org") {
-# 	if ($n =~ /^[01]{1}\s*$/) {
-# 	    return "mail01.domain.org";
-# 	} elsif ($n =~ /^[23]{1}\s*$/) {
-# 	    return "mail02.domain.org";
-# 	} elsif ($n =~ /^[45]{1}\s*$/) {
-# 	    return "mail03.domain.org";
-# 	} elsif ($n =~ /^[67]{1}\s*$/) {
-# 	    return "mail04.domain.org";
-# 	} elsif ($n =~ /^[89]{1}\s*$/) {
-# 	    return "mail05.domain.org";
-# 	} else {
-# 	    print "WARNING! SDP id /$org_id/ did not resolve to a valid ".
-# 		"zimbraMailHost.\n  This shouldn't be possible..\n";
-# 	    return undef;
-# 	}
-#     } elsif (get_z_domain() eq "dev.domain.org") {
-# 	if ($n =~ /^[0123456789]{1}$/) {
-# 	    return "dmail01.domain.org";
-# 	} else {
-# 	    print "WARNING! SDP id $org_id did not resolve to a valid ".
-# 		"zimbraMailHost.\n  This shouldn't be possible.. ".
-# 		"returning undef.";
-# 	    return undef;
-# 	}
-#     } elsif (get_z_domain() eq "dmail02.domain.org") {
-#         return "dmail02.domain.org";
-#     } else {
-# 	print "WARNING! zimbraMailHost will be undefined because domain ",
-#             get_z_domain(), " is not recognized.\n";
-# 	return undef;
-#     }
+    # TODO: revisit!  Add provisions for dmail02 and unknown domain
+    if (get_z_domain() eq "domain.org") {
+	if ($n =~ /^[01]{1}\s*$/) {
+	    return "mail01.domain.org";
+	} elsif ($n =~ /^[23]{1}\s*$/) {
+	    return "mail02.domain.org";
+	} elsif ($n =~ /^[45]{1}\s*$/) {
+	    return "mail03.domain.org";
+	} elsif ($n =~ /^[67]{1}\s*$/) {
+	    return "mail04.domain.org";
+	} elsif ($n =~ /^[89]{1}\s*$/) {
+	    return "mail05.domain.org";
+	} else {
+	    print "WARNING! SDP id /$org_id/ did not resolve to a valid ".
+		"zimbraMailHost.\n  This shouldn't be possible..\n";
+	    return undef;
+	}
+    } elsif (get_z_domain() eq "dev.domain.org") {
+	if ($n =~ /^[0123456789]{1}$/) {
+	    return "dmail01.domain.org";
+	} else {
+	    print "WARNING! SDP id $org_id did not resolve to a valid ".
+		"zimbraMailHost.\n  This shouldn't be possible.. ".
+		"returning undef.";
+	    return undef;
+	}
+    } elsif (get_z_domain() eq "dmail02.domain.org") {
+        return "dmail02.domain.org";
+    } else {
+	print "WARNING! zimbraMailHost will be undefined because domain ",
+            get_z_domain(), " is not recognized.\n";
+	return undef;
+    }
 }
 
 
