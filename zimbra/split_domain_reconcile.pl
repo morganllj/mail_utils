@@ -21,6 +21,15 @@ my (%p_users, %s_users);
 
 my $srch = "ldapsearch -x -w 00pass00 -h 00host00 -D uid=zimbra,cn=admins,cn=zimbra -Lb ou=people,dc=domain,dc=org objectclass=* uid";
 
+
+my $whoami=`whoami`;
+chomp $whoami;
+
+if ($whoami ne "zimbra") {
+    print "run as zimbra!\n\n";
+    exit;
+}
+
 my $p = $srch;
 $p =~ s/00host00/$primary{host}/;
 $p =~ s/00pass00/$primary{pass}/;
@@ -44,13 +53,15 @@ for (sort `$s`) {
 }
 
 
-#open ZM, "|su - zimbra -c \"zmprov\"" || die "problem opening pipe to zmprov..";
-open ZM, "|zmprov" || die "problem opening pipe to zmprov..";
+open ZM, "|zmprov" || die "problem opening pipe to zmprov.."
+    unless (exists $opts{n});
 
 for my $a (sort keys %p_users) {
     next 
         if exists $s_users{$a};
+
     my $cmd = "ca $a\@domain.org \"\" zimbramailtransport smtp:smtp.domain.org:25";
+
     print $cmd . "\n";
     print ZM $cmd . "\n"
         unless (exists $opts{n});
@@ -59,10 +70,10 @@ for my $a (sort keys %p_users) {
 for my $a (sort keys %s_users) {
     next 
         unless !exists $p_users{$a};
-    my $cmd = "skipping.. da $a\@domain.org";
+    my $cmd = "da $a\@domain.org";
     print $cmd . "\n";
-#    print ZM $cmd . "\n"
-#        unless (exists $opts{n});
+    print ZM $cmd . "\n"
+        unless (exists $opts{n});
             
 }
 close (ZM);
