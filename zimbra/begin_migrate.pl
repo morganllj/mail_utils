@@ -5,10 +5,13 @@ use strict;
 use Getopt::Std;
 
 # You must have sudo su - zimbra ability, ideally with no password.
-# You should be able to ssh -l zimbra $copy_to host without being prompted for a password.
+# You should be able to ssh -l zimbra $copy_to host as you (not zimbra) without being prompted for a password. 
+#   (set up password-less keys)
 # make sure /var/tmp/backup exists on $copy_to and is writeable by zimbra
 
 sub print_usage();
+
+my $domain = "domain.org";
 
 my %opts;
 getopts('u:ndc:', \%opts);
@@ -21,7 +24,7 @@ exists $opts{n} && print "-n used, no changes will be made to active account(s).
 # split the -u option, set the accounts to maintenance if -n was not passed
 my $bkp_str;
 for my $u (split /\s*,\s*/, $opts{u}) {
-    my $addr = $u . "\@domain.org";
+    my $addr = $u . "\@" . $domain;
     $bkp_str .= $addr . " ";
     my $cmd = "sudo su - zimbra -c \"zmprov ma $addr zimbraaccountstatus maintenance\"";
     print "$cmd\n";
@@ -34,7 +37,10 @@ for my $u (split /\s*,\s*/, $opts{u}) {
 chop $bkp_str;
 
 # begin backup of the accounts
-my $label=`sudo su - zimbra -c "zmbackup -f -z -a $bkp_str"`;
+#my $label=`sudo su - zimbra -c "zmbackup -f -z -a $bkp_str"`;
+my $b = "sudo su - zimbra -c \"zmbackup -f -z -a $bkp_str\"";
+print $b . "\n";
+my $label=`$b`;
 chomp $label;
 # my $label = "full-20100520.145918.061";
 
@@ -44,6 +50,9 @@ print "label: $label\n";
 # wait for the backup to finish
 my $status;
 while (1) {
+ #   my $b='sudo su - zimbra -c "zmbackupquery -lb $label | grep Status"';
+#    print $b . "\n";
+#    $status=`$b`;
     $status=`sudo su - zimbra -c "zmbackupquery -lb $label | grep Status"`;
     chomp $status;
     $status = (split /\s+/, $status)[1];
@@ -76,3 +85,6 @@ sub print_usage() {
       
 #   -u user to migrate
 #   -m don't put user in maintenance mode first.
+
+
+# zmprov ma morgan@domain.org zimbramailtransport smtp:smtp.dev.domain.org zimbraaccountstatus active
