@@ -46,73 +46,45 @@ sub attr_contains_desired_objectclass($);
 # lhs: old base
 # rhs: new base
 # an emptly rhs ("") will result in attribute removal
-my %base_change = ( "ou=people,[^,]+,\\s*o=msu_ag" => "ou=employees,o=msues",
-                    "ou=groups,[^,]+,\\s*o=msu_ag" => "ou=groups,o=msues",
-                    ",\\s+ou=contacts,\\s*o=msues" => ",ou=contacts,o=msues",
-                    "o=msu_ag" => "o=msues"
-                  );
+# my %base_change = ( "ou=people,[^,]+,\\s*o=msu_ag" => "ou=employees,o=msues",
+#                     "ou=groups,[^,]+,\\s*o=msu_ag" => "ou=groups,o=msues",
+#                     ",\\s+ou=contacts,\\s*o=msues" => ",ou=contacts,o=msues",
+#                     "o=msu_ag" => "o=msues"
+#                   );
+
+# TODO: uniqemember attributes!
+#my %base_change = ( "o=ithaca.edu, o=isp" => "o=Ithaca College,c=US"
+my %base_change = ( );
 
 ###
 # change attribute name(s).
 # an emptly rhs ("") will remove the attribute.
-my %attr_change = ( 
-    "benefitcode" => "msuesBenefitcode",
-    "ctcal.*" => "",
-    "datasource"  => "",
-    "employeeclass" => "msuesEmployeeClass",
-    "employeepidm" => "msuesEmployeePidm",
-    "employeetype" => "msuesEmployeetype",
-    "focusarea" => "msuesFocusArea",
-    "homeorgn" => "msuesHomeorgn",
-    "ics.*" => "",
-    "inetcos" => "",
-    "inetuserstatus" => "",
-    "iplanet-am-modifiable-by" => "",
-    "mafesemployee" => "msuesMafesFte",
-    "mailalternateaddress" => "",
-    "mailautoreply.*" => "",
-    "maildeferprocessing" => "",
-    "maildeliveryoption" => "",
-    "mailhost" => "",
-    "mailforwardingaddress" => "",
-    "mailmsgquota" => "",
-    "mailquota" => "",
-    "mailsieverulesource" => "",
-    "mailuserstatus" => "",
-    "memberof" => "",
-    "msuesemployee" => "msuesFte",
-    "msuemployee" => "msuesMsuFte",
-    "nsdacapability" => "",
-    "nswmExtendedUserPrefs" => "",
-    "nsuniqueid" => "",
-    "paburi" => "",
-    "preferredLanguage" => "",
-    "preferredLocale" => "",
-    "programarea" => "msuesProgramArea"
-    "psincludeingab" => "",
-    "psRoot" => "",
-    "secondaryDept" => "msuesSecondaryDept",,
-    "sunAbExtendedUserPrefs" => "",
-    "sunUC.*" => "",
-    "terminated"  => "msuesTerminated",
-    "titlecode"   => "msuesTitlecode",
-    "vacation.*" => "",
 
-    # groups
-    "inetmailgroupstatus" => "",
-    "mgman.*" => "",
-    "mgrpMsgMaxSize" => "",
-    "mgrpAllowedDomain" => "",
-    "mgrpErrorsTo" => "",
-    "mgrpModerator" => "",
-    "mgrpMsgMaxSize" => "",
-    "mgrpModerator" => "",
-    "mgrpRFC822MailMember" => "msuesMailGroupMember",
-    "nsmaxusers" => "",
-    "nsnumusers" => "",
-    "owner" => "msuesMailGroupOwner",
-    "preferredlanguage" => "",
-    "uniquemember" => "msuesMailGroupMember",
+    # "benefitcode" => "msuesBenefitcode",
+    # "ctcal.*" => "",
+    # "datasource"  => "",
+my %attr_change = ( 
+		   "maildeliveryoption" => "",
+		   "mailautoreply.*" => "",
+		   "vacation.*" => "",
+		   "mailallowedservice.*" => "",
+		   "mailmsgquota" => "",
+		   "mailquota" => "",
+		   "maildeliveryoption" => "",
+		   "ns.*" => "",
+		   "mgman.*" => "",
+		   "datasource" => "",
+		   "mailadminrole" => "",
+		   "inetmailgroupstatus" => "",
+		   "mailforwardingaddress" => "",
+		   "multiLineDescription" => "",
+		   "adminnumber" => "",
+		   "mailmessagestore" => "",
+		   "macaddress" => "",
+		   "preferredlanguage" => "",
+		   "memberof" => "",
+		   "mailequivalentaddress" => "",
+		   "member" => ""
 );
 
 ###
@@ -123,28 +95,35 @@ my %attr_set_value = ( );
 ###
 # Change the name of one or more objectclasses.
 # This conversion is done before @objectclasses and @required_objectclasses are evaluated.
-my %objectclass_name_change = ( "extPerson" => "msuesEmployee" );
+my %objectclass_name_change = (
+			      "inetmailgroup" => "mailgroup"
+			      );
 
 ###
 # Add rhs objectclass to any entry with lhs objectclass
-my %add_objectclasses = ( "msuesEmployee" => "msuesMailPerson",
-                          "groupofuniquenames" => "msuesMailGroup",
-                          "msuesmailgroup" => "groupofurls"  # allows memberurl
-                        );
+my %add_objectclasses = ( "mirapointmailuser" => "icorgperson");
 
 ##
 # List of objectclasses you want included in an entry
 # Remove unwanted indvidual objectclasses but omitting them here.
 my @desired_objectclasses = 
-    qw/top person organizationalPerson inetOrgPerson posixAccount shadowAccount account sambaSamAccount 
-       msuesEmployee posixgroup groupofuniquenames/;
+    qw/top person organization organizationalPerson organizationalUnit inetOrgPerson  
+       groupofuniquenames icorgperson ctcaluser mirapointmailuser groupofUrls mailgroup
+      icorganizationalunit ctcalresource groupofnames 
+      cosClassicDefinition cosSuperDefinition cosTemplate extensibleObject ldapsubentry 
+      nscomplexroledefinitionnsfilteredroledefinition nsroledefinition passwordpolicy
+      ctCalAdmin/;
 
 ###
 # Objectclasses of entries you wish to include
 # If the objectclass is here the entry will be included
 # If an objectclass here is not also in @desired_objecclasses then the 
 #    objectclass itself will be stripped but the entry will be included.
-my @required_objectclasses = qw/inetorgperson posixgroup groupofuniquenames/;
+my @required_objectclasses = qw/organization organizationalunit inetorgperson groupofuniquenames 
+      groupofUrls mailgroup icorganizationalunit ctcalresource groupofnames
+      cosClassicDefinition cosSuperDefinition cosTemplate extensibleObject ldapsubentry 
+      nscomplexroledefinitionnsfilteredroledefinition nsroledefinition passwordpolicy
+      ctCalAdmin/;
 
 ###
 # These bases and anything below in the directory will be ignored.  
@@ -154,11 +133,20 @@ my @required_objectclasses = qw/inetorgperson posixgroup groupofuniquenames/;
 #     if you "ignore" ou=people,o=base but  
 #     convert o=domain,ou=people,o=base ou=employees,o=base 
 #     the new ou=employees,o=base will be included.
-my @bases_to_ignore = ("o=Business,o=msues", "ou=People,o=msues");
+my @bases_to_ignore = ( "uid=ServiceAdmin,ou=People,o=ithaca.edu, o=isp",
+			"o=ida,o=isp",
+			"uid=msg-admin[^\,]+, ou=People, o=ithaca.edu, o=isp",
+			"uid=junk,ou=people,o=ithaca.edu,o=isp", 
+		      );
 
 # customization ends here.
 ####
 ####
+
+for my $b (@bases_to_ignore) {
+    $b =~ s/\s+,/,/g;
+    $b =~ s/\,\s+/,/g;
+}
 
 
 
@@ -172,7 +160,10 @@ while(<>) {
     # find the dn, skip an extraneous contents above (# get rid of version: 1 and #entry-id: num)
     do {
         $dn = shift @l;
-    } until ($#l<0 || $dn =~ /^dn:/);  
+    } until ($#l<0 || $dn =~ /^dn:/);
+
+    $dn =~ s/\s+,/,/g;
+    $dn =~ s/\,\s+/,/g;
 
     # often comments are set out alone in LDIF and the above do while strips them leaving nothing.
     next if ($#l<0);
@@ -198,7 +189,7 @@ while(<>) {
         s/^objectclass:/:/i 
             if (/^objectclass:/i && !attr_contains_desired_objectclass($_));
 
-        # change attributes.  Note that it's normal for attributes to end up /^:/--see not above.
+        # change attributes.  Note that it's normal for attributes to end up /^:/--see note above.
         for my $k (keys %attr_change) {
             s/^$k:/$attr_change{$k}:/i
         }
@@ -211,13 +202,19 @@ while(<>) {
 
     for my $k (keys %add_objectclasses) {
         push @l, "objectclass: " . $add_objectclasses{$k}
-            if (grep /objectclass:\s*$k/i, @l);
+            if (grep /objectclass:\s*$k/i, @l &&
+		!grep /objectclass:\s*$add_objectclasses{$k}/i, @l);
     }
+
+    # TODO: IC hack, add general config later
+    push @l, "objectclass: icorgguest"
+      if ($dn =~ /\,\s*ou=guests\,\s*/i);
+    $dn =~ s/cn=#/cn=/;
 
     # skip entire entries unless they're in our list of required objectclasses.
     next unless contains_required_object_classes(@l);
 
-    # find and remave any attriburtes whose name was left null.
+    # find and remave any attributes whose name was left null.
     my @pl;
     for (@l) {
         push @pl, $_ unless /^:/;
