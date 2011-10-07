@@ -59,7 +59,8 @@ for (split /\n/, $search_out) {
 
     my $bkp_cmd = 1;
     if ($vendor_version >= 6) {
-        $bkp_cmd = $dsconf ." export -e -h localhost ". $context ." ". $backup_path.
+        # $bkp_cmd = $dsconf ." export -e -h localhost ". $context ." ". $backup_path.
+        $bkp_cmd = $dsconf ." export --no-repl -e -h localhost ". $context ." ". $backup_path.
             $context_filename."_".$date.".ldif<<EOF\n$bind_pass\nEOF\n"; 
     } else {
         # for now assume it's version 5 if it's not 6
