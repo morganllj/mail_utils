@@ -2,6 +2,7 @@
 #
 # Morgan Jones (morgan@morganjones.org)
 # $Id$
+# This is the version used to convert Ithaca College's directory from iPlanet 5.2 to ODSEE 7.
 #
 # Description: general purpose script to convert an ldif from one ldap
 # server/schema to another.  you can omit entire entries, transform
