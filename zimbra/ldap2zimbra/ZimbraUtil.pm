@@ -243,7 +243,8 @@ sub ooul_func_rename_archives($) {
         # get internal employee id from ldap
         my $int_empl_id;
         if (exists $args{attr_frm_ldap}) {
-            $int_empl_id = $lusr->get_value($args{attr_frm_ldap});
+#            $int_empl_id = $lusr->get_value($args{attr_frm_ldap});
+            $int_empl_id = get_printable_value($lusr, $args{attr_frm_ldap};
         } else {
             die "no attribute received in ooul_func_rename_archives";
         }
@@ -521,8 +522,11 @@ sub add_user {
     my $lu = shift;
     my $child_wtr_fh = shift;
 
-    print "\nadding: ", $lu->get_value("uid"), ", ",
-        $lu->get_value("cn"), "\n";
+#    print "\nadding: ", $lu->get_value("uid"), ", ",
+#        $lu->get_value("cn"), "\n";
+
+    print "\nadding: ", get_printable_value($lu, "uid"), ", ",
+      get_printable_value($lu,"cn"), "\n";
 
     my $z2l = get_z2l();
 
@@ -543,7 +547,8 @@ sub add_user {
     if (in_multi_domain_mode()) {
         $an = $lu->get_value("mail");
     } else {
-        $an = $lu->get_value("uid")."@".get_z_domain();
+#        $an = $lu->get_value("uid")."@".get_z_domain();
+        $an = get_printable_value($lu, "uid")."@".get_z_domain();
     }
     $d->add('name', $MAILNS, undef,$an);
 
@@ -676,7 +681,8 @@ sub add_archive_acct {
     my $archive_account = build_archive_account($lu);
 
     print "adding archive: ", $archive_account,
-        " for ", $lu->get_value("uid"), "\n";
+#        " for ", $lu->get_value("uid"), "\n";
+        " for ", get_printable_value($lu,"uid"), "\n";
     print "writing newly created archive to parent ($$): $archive_account\n"
 	if (exists $g_params{g_debug});
     print $child_wtr_fh "$archive_account\n";
@@ -759,7 +765,9 @@ sub build_target_z_value {
 	    } @z2l_literals;
 
 	    if ($#ldap_v < 0) {
-		@ldap_v = $lu->get_value($v);
+#		@ldap_v = $lu->get_value($v);
+		@ldap_v = get_printable_value($lu, $v);
+		
 		map { fix_case ($_) } @ldap_v;
 	    } else {
 		@ldap_v;
@@ -1493,11 +1501,13 @@ sub build_last_first($) {
 
     my $r = undef;
 
-    if (defined (my $l = $lu->get_value("sn"))) {
+#    if (defined (my $l = $lu->get_value("sn"))) {
+    if (defined (my $l = get_printable_value($lu, "sn"))) {
 	$r .= $l;
     }
 
-    if (defined (my $f = $lu->get_value("givenname"))) {
+#    if (defined (my $f = $lu->get_value("givenname"))) {
+    if (defined (my $f = get_printable_value($lu, "givenname"))) {
 	$r .= ", " if (defined $r);
 	$r .= $f;
     }
@@ -1518,12 +1528,14 @@ sub build_phone_fax($) {
 
     my $phone_separator = '-';
 
-    if (defined (my $p = $lu->get_value("orgworktelephone"))) {
+#    if (defined (my $p = $lu->get_value("orgworktelephone"))) {
+    if (defined (my $p = get_printable_value($lu, "orgworktelephone"))) {
 	$p =~ s/(\d{3})(\d{3})(\d{4})/$1$phone_separator$2$phone_separator$3/;
 	$r .= "Phone: " . $p; 
     }
 
-    if (defined (my $f = $lu->get_value("orgworkfax"))) {
+#    if (defined (my $f = $lu->get_value("orgworkfax"))) {
+    if (defined (my $f = get_printable_value($lu, "orgworkfax"))) {
         # only add "<br>" if there's a telephone
 	$r .= "<BR>" if (defined $r);
 	$f =~ s/(\d{3})(\d{3})(\d{4})/$1$phone_separator$2$phone_separator$3/;
@@ -1548,7 +1560,8 @@ sub build_archive_account($) {
     shift if ((ref $_[0]) eq __PACKAGE__);
     my $lu = shift;
 
-    return $lu->get_value("orgghrsintemplidno")."\@".get_z_domain().".".$z_params{z_archive_suffix};
+#    return $lu->get_value("orgghrsintemplidno")."\@".get_z_domain().".".$z_params{z_archive_suffix};
+    return get_printable_value($lu, "orgghrsintemplidno")."\@".get_z_domain().".".$z_params{z_archive_suffix};
 }
 
 
@@ -1569,7 +1582,9 @@ sub build_org_zmailhost($) {
     shift if ((ref $_[0]) eq __PACKAGE__);
     my $lu = shift;
 
-    my $org_id = $lu->get_value("orgghrsintemplidno");
+#    my $org_id = $lu->get_value("orgghrsintemplidno");
+    my $org_id = get_printable_value($lu, "orgghrsintemplidno");
+
 
     if (!defined $org_id) {
 	print "WARNING! undefined SDP id, zimbraMailHost will be undefined\n";
@@ -1752,8 +1767,23 @@ sub delete_not_in_ldap() {
 
 
 
+#####
+sub get_printable_value ($$) {
+    shift if ((ref $_[0]) eq __PACKAGE__);
+    my ($ldap_user, $value) = @_;
 
-
+    if (wantarray()) {
+	my @v = $ldap_user->get_value($value);
+	for (@v) {
+	    s/[^[:print:]\?]/ /g;
+	}
+	return (@v);
+    } else {
+	my $v = $ldap_user->get_value($value);
+	$v =~ s/[^[:print:]]/ /g;
+	return $v;
+    }
+}
 
 
 

@@ -116,9 +116,11 @@ for my $lusr (@ldap_entries) {
     $users_left--;
 
     if ($zu->in_multi_domain_mode()) {
-  	$usr = lc $lusr->get_value("mail");
+#  	$usr = lc $lusr->get_value("mail");
+  	$usr = lc $zu->get_printable_value ($lusr, "mail");
     } else {
-  	$usr = lc $lusr->get_value("uid") . "@" . $zu->get_z_domain()
+#  	$usr = lc $lusr->get_value("uid") . "@" . $zu->get_z_domain()
+  	$usr = lc $zu->get_printable_value ($lusr, "uid") . "@" . $zu->get_z_domain()
     }
 
     # 110330, morgan: this won't work for multi-domain!
