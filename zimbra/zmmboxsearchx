@@ -224,6 +224,7 @@ use Getopt::Long qw(GetOptions);
 use IO::File qw();
 use Pod::Usage qw(pod2usage);
 use POSIX qw(:signal_h);
+use Data::Dumper;
 
 # deal with non standard Perl modules
 # - see also load_modules subroutine...
@@ -246,11 +247,14 @@ my $DEBUG   = 0;              # GLOBAL set by process_options()
 my $VERSION = "1.00";
 my $Prog    = basename($0);
 
+my %Argv;
+
 main();
 
 # main program
 sub main {
-    my %Argv = process_options();
+#    my %Argv = process_options();
+    %Argv = process_options();
 
     my $tStart = Benchmark->new;
     warn( "$Prog: info: started ", _ts(), "\n" );
@@ -842,13 +846,39 @@ sub call_soap {
       :                    undef;
 
     my $soap = $opt{soap};
+
     my $req  = SOAP::Data->name( $opt{req} );
     $req->attr( $opt{attr} ) if $opt{attr};
 
     my $resp;
-    my ( $try, $maxtry, $sleep ) = ( 0, 3, 0 );
+    
+    my ( $try, $maxtry, $sleep ) = ( 0, 99, 5 );
     while ( !$resp && $try++ < $maxtry ) {
+	# invalid auth token is in $opt{head}
         eval { $resp = $soap->call( $req, $opt{head}, @{ $opt{body} } ) };
+	
+    if ( $handler && ( $@ || $resp->fault ) ) {
+	    print "auth credentials may have expired!  attempting re-auth..\n";
+ 
+	    my $head2 = SOAP::Header->name("context")->attr( { xmlns => NS_ZADMIN } );
+	    my $body2 = [
+			 SOAP::Data->name( name     => $Argv{authuser} ),
+			 SOAP::Data->name( password => $Argv{password} ),
+			];
+	    
+	    my $req2 = SOAP::Data->name( "AuthRequest" );
+	    $req2->attr ( { xmlns => NS_ZADMIN } );
+	    my $resp2 = $soap->call( $req2, $head2, @{ $body2 } );
+	    
+	    my $ainfo = auth_info( resp => $resp2 );
+	    $opt{head} = $ainfo->{header};
+
+	    $resp=undef;
+
+	}
+
+
+
         if ($@) {
             chomp($@);
             last unless ( $try < $maxtry );
@@ -859,6 +889,7 @@ sub call_soap {
     }
 
     if ( $handler && ( $@ || $resp->fault ) ) {
+	print "resp: ", Dumper $resp;
         $handler->(
             "$Prog: ERROR: $opt{req} (try #$try): ",
             ( $@ || _err($resp) ), "\n"
