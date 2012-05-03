@@ -37,11 +37,11 @@ use ZimbraUtil;
 #  reliably.
 $relative_child_status_path = "/child_status";
 
-$multi_domain_mode = 0; # use uid attribute and concat the domain provided by ldap2zimbra
+$in_multi_domain_mode = 0; # use uid attribute and concat the domain provided by ldap2zimbra
 #$in_multi_domain_mode = 1; # use mail attribute including the domain.
 
-$create_archives = 0;  # don't create archive accounts
-# $create_archives = 1; # create archive accounts
+# $create_archives = 0;  # don't create archive accounts
+$create_archives = 1; # create archive accounts
 
 # ldap defaults
 %l_params = (
@@ -66,15 +66,12 @@ $exclude_group_rdn = "cn=orgexcludes";  # assumed to be in $ldap_base
 
 # Zimbra defaults
 %z_params = (
-#    z_server => "130.18.22.17",
-#    z_pass => "pass",
-
     z_server => "dmail01.domain.org",
     z_pass => "pass",
-#    z_domain => "dev.domain.org",  # mail domain, ignored if $in_multi_domain_mode == 1
-    z_domain => "domain.org",  # mail domain, ignored if $in_multi_domain_mode == 1
+    z_domain => "dev.domain.org",  # mail domain, ignored if $in_multi_domain_mode == 1
+#    z_domain => "domain.org",  # mail domain, ignored if $in_multi_domain_mode == 1
 # leave archive_mailhost blank if you do not use Zimbra Archiving
-    z_archive_mailhost => "dmail02.domain.org",
+    z_archive_mailhost => "dmail01.domain.org",
     z_archive_suffix => "archive",
 #     # TODO: look up cos by name instead of requiring the user enter the cos id.
 #     # production:
@@ -150,10 +147,13 @@ $z2l = {
     "st" =>                    ["orgworkstate"],
     "l" =>                     ["orgworkcity"],
     "postalcode" =>            ["orgworkzip"],
-    
 
-
-    "co" =>                        \&build_phone_fax,
+#    "co" =>                        \&build_phone_fax,
+     "co" =>			    [""],
+     "telephonenumber" =>			    \&build_phone,
+     "facsimiletelephonenumber" =>			    \&build_fax,
+#     "fax" =>			    \&build_fax,
+     
     "street" =>                    \&build_address,
     "displayname" =>               \&build_last_first,
     "zimbrapreffromdisplay" =>     \&build_last_first,
@@ -162,7 +162,9 @@ $z2l = {
 #    "zimbramailhost" =>            \&build_org_zmailhost,
 #    "zimbraarchiveaccount" =>      \&build_archive_account,
 #    "amavisarchivequarantineto" => \&build_archive_account,
-    "zimbramailtransport" =>       \&build_split_domain_zmailtransport
+
+# if provisioning a split domain host     
+#    "zimbramailtransport" =>       \&build_split_domain_zmailtransport
 };
 
 # $z2l = {
@@ -179,4 +181,3 @@ $archive_z2l = {
     "zimbramailhost" => \&get_z_archive_mailhost,
     "zimbracosid"    => \&get_archive_cos_id,
 };
-

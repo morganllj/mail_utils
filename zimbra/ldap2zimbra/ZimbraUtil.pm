@@ -244,7 +244,7 @@ sub ooul_func_rename_archives($) {
         my $int_empl_id;
         if (exists $args{attr_frm_ldap}) {
 #            $int_empl_id = $lusr->get_value($args{attr_frm_ldap});
-            $int_empl_id = get_printable_value($lusr, $args{attr_frm_ldap};
+            $int_empl_id = get_printable_value($lusr, $args{attr_frm_ldap});
         } else {
             die "no attribute received in ooul_func_rename_archives";
         }
@@ -1545,6 +1545,34 @@ sub build_phone_fax($) {
     return $r;
 }
 
+######
+sub build_phone($) {
+    shift if ((ref $_[0]) eq __PACKAGE__);
+    my $lu = shift;
+
+    my $phone_separator = '-';
+
+    if (defined (my $p = get_printable_value($lu, "orgworktelephone"))) {
+	$p =~ s/(\d{3})(\d{3})(\d{4})/$1$phone_separator$2$phone_separator$3/;
+	return $p;
+    }
+    return undef;
+}
+
+sub build_fax($) {
+    shift if ((ref $_[0]) eq __PACKAGE__);
+    my $lu = shift;
+
+    my $phone_separator = '-';
+
+    if (defined (my $p = get_printable_value($lu, "orgworkfax"))) {
+	$p =~ s/(\d{3})(\d{3})(\d{4})/$1$phone_separator$2$phone_separator$3/;
+	return $p;
+    }
+    return undef;
+}
+
+
 
 ######
 sub build_address($) {
@@ -1780,7 +1808,9 @@ sub get_printable_value ($$) {
 	return (@v);
     } else {
 	my $v = $ldap_user->get_value($value);
-	$v =~ s/[^[:print:]]/ /g;
+	if (defined $v) {
+	    $v =~ s/[^[:print:]]/ /g
+	}
 	return $v;
     }
 }
