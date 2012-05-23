@@ -1,86 +1,86 @@
 diff -ur orig/Mailman/Cgi/create.py Mailman/Cgi/create.py
- --- orig/Mailman/Cgi/create.py	2007-01-06 00:54:44.000000000 -0800
- +++ Mailman/Cgi/create.py	2008-04-20 13:07:50.000000000 -0700
- @@ -31,6 +31,7 @@
-  from Mailman import i18n
-  from Mailman.htmlformat import *
-  from Mailman.Logging.Syslog import syslog
- +from Mailman.ZimbraIntegration import ZimbraIntegrationException
-  
-  # Set up i18n
-  _ = i18n._
- @@ -217,6 +218,10 @@
-                  _('''Some unknown error occurred while creating the list.
-                  Please contact the site administrator for assistance.'''))
-              return
- +	except ZimbraIntegrationException, e:
- +	    request_creation(doc, cgidata,
- +	        "Unable to create the list, zimbra error: %s" % e)
- +	    return
-  
-          # Initialize the host_name and web_page_url attributes, based on
-          # virtual hosting settings and the request environment variables.
- diff -ur orig/Mailman/Cgi/rmlist.py Mailman/Cgi/rmlist.py
- --- orig/Mailman/Cgi/rmlist.py	2007-01-06 00:54:44.000000000 -0800
- +++ Mailman/Cgi/rmlist.py	2008-04-20 12:58:14.000000000 -0700
- @@ -29,6 +29,7 @@
-  from Mailman import i18n
-  from Mailman.htmlformat import *
-  from Mailman.Logging.Syslog import syslog
- +from Mailman.ZimbraIntegration import ZimbraIntegration
-  
-  # Set up i18n
-  _ = i18n._
- @@ -157,6 +158,9 @@
-                         'directory %s not deleted due to permission problems',
-                         dir)
-  
- +    zi = ZimbraIntegration()
- +    zi.deleteAccounts(listname, mlist.host_name)
- +
-      title = _('Mailing list deletion results')
-      doc.SetTitle(title)
-      table = Table(border=0, width='100%')
- diff -ur orig/Mailman/MailList.py Mailman/MailList.py
- --- orig/Mailman/MailList.py	2007-01-06 00:54:44.000000000 -0800
- +++ Mailman/MailList.py	2008-04-20 12:45:10.000000000 -0700
- @@ -46,6 +46,7 @@
-  from Mailman import Errors
-  from Mailman import LockFile
-  from Mailman.UserDesc import UserDesc
- +from Mailman.ZimbraIntegration import ZimbraIntegration
-  
-  # base classes
-  from Mailman.Archiver import Archiver
- @@ -486,6 +487,11 @@
-              raise Errors.BadListNameError, postingaddr
-          # Validate the admin's email address
-          Utils.ValidateEmail(admin)
- +
- +	# Integrate with Zimbra
- +        zi = ZimbraIntegration()
- +	zi.createAccounts(name, emailhost)
- +
-          self._internal_name = name
-          self._full_path = Site.get_listpath(name, create=1)
-          # Don't use Lock() since that tries to load the non-existant config.pck
- diff -ur orig/Mailman/mm_cfg.py Mailman/mm_cfg.py
- --- orig/Mailman/mm_cfg.py	2008-04-19 09:20:44.000000000 -0700
- +++ Mailman/mm_cfg.py	2008-04-20 13:04:05.000000000 -0700
- @@ -80,6 +80,7 @@
-  
-  DEFAULT_URL_HOST   = 'YOUR_MAILMAN_WEB_HOSTNAME'
-  DEFAULT_EMAIL_HOST = 'YOUR_EMAIL_DOMAINNAME'
- +OWNERS_CAN_DELETE_THEIR_OWN_LISTS = True # delete to disable delete from web
-  
-  # Because we've overriden the virtual hosts above add_virtualhost
-  # MUST be called after they have been defined.
- @@ -94,3 +95,8 @@
-  
-  # Note - if you're looking for something that is imported from mm_cfg, but you
-  # didn't find it above, it's probably in Defaults.py.
- +
- +ZIMBRA_ADMIN_SOAP_SERVICE = 'https://YOURZCSHOST:7071/service/admin/soap/'
- +MAILMAN_SMTP_TRANSPORT = 'YOUR_MAILMAN_SMTP_HOSTNAME'
- +ZIMBRA_ADMIN_USERNAME = 'YOUR_ZCS_ADMIN_USERNAME'
- +ZIMBRA_ADMIN_PASSWORD = 'YOUR_ZCS_ADMIN_PASSWORD'
+--- orig/Mailman/Cgi/create.py	2007-01-06 00:54:44.000000000 -0800
++++ Mailman/Cgi/create.py	2008-04-20 13:07:50.000000000 -0700
+@@ -31,6 +31,7 @@
+ from Mailman import i18n
+ from Mailman.htmlformat import *
+ from Mailman.Logging.Syslog import syslog
++from Mailman.ZimbraIntegration import ZimbraIntegrationException
+ 
+ # Set up i18n
+ _ = i18n._
+@@ -217,6 +218,10 @@
+                 _('''Some unknown error occurred while creating the list.
+                 Please contact the site administrator for assistance.'''))
+             return
++	except ZimbraIntegrationException, e:
++	    request_creation(doc, cgidata,
++	        "Unable to create the list, zimbra error: %s" % e)
++	    return
+ 
+         # Initialize the host_name and web_page_url attributes, based on
+         # virtual hosting settings and the request environment variables.
+diff -ur orig/Mailman/Cgi/rmlist.py Mailman/Cgi/rmlist.py
+--- orig/Mailman/Cgi/rmlist.py	2007-01-06 00:54:44.000000000 -0800
++++ Mailman/Cgi/rmlist.py	2008-04-20 12:58:14.000000000 -0700
+@@ -29,6 +29,7 @@
+ from Mailman import i18n
+ from Mailman.htmlformat import *
+ from Mailman.Logging.Syslog import syslog
++from Mailman.ZimbraIntegration import ZimbraIntegration
+ 
+ # Set up i18n
+ _ = i18n._
+@@ -157,6 +158,9 @@
+                        'directory %s not deleted due to permission problems',
+                        dir)
+ 
++    zi = ZimbraIntegration()
++    zi.deleteAccounts(listname, mlist.host_name)
++
+     title = _('Mailing list deletion results')
+     doc.SetTitle(title)
+     table = Table(border=0, width='100%')
+diff -ur orig/Mailman/MailList.py Mailman/MailList.py
+--- orig/Mailman/MailList.py	2007-01-06 00:54:44.000000000 -0800
++++ Mailman/MailList.py	2008-04-20 12:45:10.000000000 -0700
+@@ -46,6 +46,7 @@
+ from Mailman import Errors
+ from Mailman import LockFile
+ from Mailman.UserDesc import UserDesc
++from Mailman.ZimbraIntegration import ZimbraIntegration
+ 
+ # base classes
+ from Mailman.Archiver import Archiver
+@@ -486,6 +487,11 @@
+             raise Errors.BadListNameError, postingaddr
+         # Validate the admin's email address
+         Utils.ValidateEmail(admin)
++
++	# Integrate with Zimbra
++        zi = ZimbraIntegration()
++	zi.createAccounts(name, emailhost)
++
+         self._internal_name = name
+         self._full_path = Site.get_listpath(name, create=1)
+         # Don't use Lock() since that tries to load the non-existant config.pck
+diff -ur orig/Mailman/mm_cfg.py Mailman/mm_cfg.py
+--- orig/Mailman/mm_cfg.py	2008-04-19 09:20:44.000000000 -0700
++++ Mailman/mm_cfg.py	2008-04-20 13:04:05.000000000 -0700
+@@ -80,6 +80,7 @@
+ 
+ DEFAULT_URL_HOST   = 'YOUR_MAILMAN_WEB_HOSTNAME'
+ DEFAULT_EMAIL_HOST = 'YOUR_EMAIL_DOMAINNAME'
++OWNERS_CAN_DELETE_THEIR_OWN_LISTS = True # delete to disable delete from web
+ 
+ # Because we've overriden the virtual hosts above add_virtualhost
+ # MUST be called after they have been defined.
+@@ -94,3 +95,8 @@
+ 
+ # Note - if you're looking for something that is imported from mm_cfg, but you
+ # didn't find it above, it's probably in Defaults.py.
++
++ZIMBRA_ADMIN_SOAP_SERVICE = 'https://YOURZCSHOST:7071/service/admin/soap/'
++MAILMAN_SMTP_TRANSPORT = 'YOUR_MAILMAN_SMTP_HOSTNAME'
++ZIMBRA_ADMIN_USERNAME = 'YOUR_ZCS_ADMIN_USERNAME'
++ZIMBRA_ADMIN_PASSWORD = 'YOUR_ZCS_ADMIN_PASSWORD'
