@@ -39,20 +39,39 @@ ZIMBRA_REQUEST = \
     '  </soap:Header>'                                                     \
     '  <soap:Body>%s</soap:Body>'                                          \
     '</soap:Envelope>'
+# ZIMBRA_CREATE_REQUEST = \
+#     '<CreateAccountRequest xmlns="urn:zimbraAdmin">' \
+#     '  <name>%s</name>'                              \
+#     '  <a n="zimbraMailTransport">smtp:%s</a>'       \
+#     '</CreateAccountRequest>'
 
 ZIMBRA_CREATE_REQUEST = \
-    '<CreateAccountRequest xmlns="urn:zimbraAdmin">' \
+    '<CreateCalendarResourceRequest xmlns="urn:zimbraAdmin">' \
     '  <name>%s</name>'                              \
+    '  <a n="displayName">%s</a>'       \
+    '  <a n="zimbraCalResType">Location</a>'       \
     '  <a n="zimbraMailTransport">smtp:%s</a>'       \
-    '</CreateAccountRequest>'
+    '</CreateCalendarResourceRequest>'
+ZIMBRA_MODIFY_MAILHOST_REQUEST = \
+    '<ModifyCalendarResourceRequest xmlns="urn:zimbraAdmin">' \
+    '  <id>%s</id>'                              \
+    '  <a n="zimbraMailHost">%s</a>'       \
+    '</ModifyCalendarResourceRequest>'
+ZIMBRA_MODIFY_MAILTRANSPORT_REQUEST = \
+    '<ModifyCalendarResourceRequest xmlns="urn:zimbraAdmin">' \
+    '  <id>%s</id>'                              \
+    '  <a n="zimbraMailHost">%s</a>'       \
+    '</ModifyCalendarResourceRequest>'
+
 ZIMBRA_GET_REQUEST = \
-    '<GetAccountRequest xmlns="urn:zimbraAdmin">' \
-    '  <account by="name">%s</account>'           \
-    '</GetAccountRequest>'
+    '<GetCalendarResourceRequest xmlns="urn:zimbraAdmin">' \
+    '  <calresource by="name">%s</calresource>'           \
+    '</GetCalendarResourceRequest>'
+
 ZIMBRA_DELETE_REQUEST = \
-    '<DeleteAccountRequest xmlns="urn:zimbraAdmin">' \
+    '<DeleteCalendarResourceRequest xmlns="urn:zimbraAdmin">' \
     '  <id>%s</id>'                                  \
-    '</DeleteAccountRequest>'
+    '</DeleteCalendarResourceRequest>'
 
 class ZimbraIntegration:
     def __init__(self):
@@ -126,7 +145,7 @@ class ZimbraIntegration:
         requestBody = ZIMBRA_GET_REQUEST % name
         requestBody = self.__envelope(requestBody)
         tree = self.__sendRequest(requestBody)
-        node = tree.find("//{urn:zimbraAdmin}account")
+        node = tree.find("//{urn:zimbraAdmin}calresource")
         return node.get("id")
 
     def deleteAccounts(self, name, domain):
@@ -143,7 +162,16 @@ class ZimbraIntegration:
         self.__sendRequest(requestBody)
 
     def createAccount(self, name):
-        requestBody = ZIMBRA_CREATE_REQUEST % (name, self.__transport)
+        requestBody = ZIMBRA_CREATE_REQUEST % (name, name, self.__transport)
+        requestBody = self.__envelope(requestBody)
+        self.__sendRequest(requestBody)
+        id = self.getAccount(name)
+        
+        requestBody = ZIMBRA_MODIFY_MAILHOST_REQUEST % (id, self.__transport)
+        requestBody = self.__envelope(requestBody)
+        self.__sendRequest(requestBody)
+
+        requestBody = ZIMBRA_MODIFY_MAILTRANSPORT_REQUEST % (id, self.__transport)
         requestBody = self.__envelope(requestBody)
         self.__sendRequest(requestBody)
 
