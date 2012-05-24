@@ -46,32 +46,21 @@ ZIMBRA_REQUEST = \
 #     '</CreateAccountRequest>'
 
 ZIMBRA_CREATE_REQUEST = \
-    '<CreateCalendarResourceRequest xmlns="urn:zimbraAdmin">' \
+    '<CreateDistributionListRequest xmlns="urn:zimbraAdmin">' \
     '  <name>%s</name>'                              \
-    '  <a n="displayName">%s</a>'       \
-    '  <a n="zimbraCalResType">Location</a>'       \
-    '  <a n="zimbraMailTransport">smtp:%s</a>'       \
-    '</CreateCalendarResourceRequest>'
-ZIMBRA_MODIFY_MAILHOST_REQUEST = \
-    '<ModifyCalendarResourceRequest xmlns="urn:zimbraAdmin">' \
-    '  <id>%s</id>'                              \
-    '  <a n="zimbraMailHost">%s</a>'       \
-    '</ModifyCalendarResourceRequest>'
-ZIMBRA_MODIFY_MAILTRANSPORT_REQUEST = \
-    '<ModifyCalendarResourceRequest xmlns="urn:zimbraAdmin">' \
-    '  <id>%s</id>'                              \
-    '  <a n="zimbraMailHost">%s</a>'       \
-    '</ModifyCalendarResourceRequest>'
+    '  <a n="zimbraHideInGal">TRUE</a>'       \
+    '  <a n="zimbraMailForwardingAddress">%s</a>'       \
+    '</CreateDistributionListRequest>'
 
 ZIMBRA_GET_REQUEST = \
-    '<GetCalendarResourceRequest xmlns="urn:zimbraAdmin">' \
-    '  <calresource by="name">%s</calresource>'           \
-    '</GetCalendarResourceRequest>'
+    '<GetDistributionListRequest xmlns="urn:zimbraAdmin">' \
+    '  <dl by="name">%s</dl>'           \
+    '</GetDistributionListRequest>'
 
 ZIMBRA_DELETE_REQUEST = \
-    '<DeleteCalendarResourceRequest xmlns="urn:zimbraAdmin">' \
+    '<DeleteDistributionListRequest xmlns="urn:zimbraAdmin">' \
     '  <id>%s</id>'                                  \
-    '</DeleteCalendarResourceRequest>'
+    '</DeleteDistributionListRequest>'
 
 class ZimbraIntegration:
     def __init__(self):
@@ -82,6 +71,7 @@ class ZimbraIntegration:
             self.__transport = mm_cfg.MAILMAN_SMTP_TRANSPORT
             self.__username  = mm_cfg.ZIMBRA_ADMIN_USERNAME
             self.__password  = mm_cfg.ZIMBRA_ADMIN_PASSWORD
+            self.__listhost  = mm_cfg.DEFAULT_URL_HOST
         except: # testing configuration
             self.__url = "https://192.168.230.130:7071/service/admin/soap/"
             self.__transport = 'rhel5-testn.testdomain.com'
@@ -133,7 +123,8 @@ class ZimbraIntegration:
         try:
             for i in MAILMAN_LIST_ACCOUNTS:
                 address = "%s%s@%s" % (name, i, domain)
-                self.createAccount(address)
+                list = "%s%s" % (name, i)
+                self.createAccount(list, address)
         except ZimbraIntegrationException, e:
             self.__rollbackCreation(name, domain)
             raise ZimbraIntegrationException(e.reason)
@@ -145,7 +136,7 @@ class ZimbraIntegration:
         requestBody = ZIMBRA_GET_REQUEST % name
         requestBody = self.__envelope(requestBody)
         tree = self.__sendRequest(requestBody)
-        node = tree.find("//{urn:zimbraAdmin}calresource")
+        node = tree.find("//{urn:zimbraAdmin}dl")
         return node.get("id")
 
     def deleteAccounts(self, name, domain):
@@ -161,19 +152,12 @@ class ZimbraIntegration:
         requestBody = self.__envelope(ZIMBRA_DELETE_REQUEST % id)
         self.__sendRequest(requestBody)
 
-    def createAccount(self, name):
-        requestBody = ZIMBRA_CREATE_REQUEST % (name, name, self.__transport)
+    def createAccount(self, name, address):
+        forwardingaddr = "%s@%s" % (name, self.__listhost)
+        requestBody = ZIMBRA_CREATE_REQUEST % (address, forwardingaddr)
         requestBody = self.__envelope(requestBody)
         self.__sendRequest(requestBody)
-        id = self.getAccount(name)
-        
-        requestBody = ZIMBRA_MODIFY_MAILHOST_REQUEST % (id, self.__transport)
-        requestBody = self.__envelope(requestBody)
-        self.__sendRequest(requestBody)
-
-        requestBody = ZIMBRA_MODIFY_MAILTRANSPORT_REQUEST % (id, self.__transport)
-        requestBody = self.__envelope(requestBody)
-        self.__sendRequest(requestBody)
+        id = self.getAccount(address)
 
 class ZimbraIntegrationException(Exception):
     def __init__(self, reason):
