@@ -39,11 +39,6 @@ ZIMBRA_REQUEST = \
     '  </soap:Header>'                                                     \
     '  <soap:Body>%s</soap:Body>'                                          \
     '</soap:Envelope>'
-# ZIMBRA_CREATE_REQUEST = \
-#     '<CreateAccountRequest xmlns="urn:zimbraAdmin">' \
-#     '  <name>%s</name>'                              \
-#     '  <a n="zimbraMailTransport">smtp:%s</a>'       \
-#     '</CreateAccountRequest>'
 
 ZIMBRA_CREATE_REQUEST = \
     '<CreateDistributionListRequest xmlns="urn:zimbraAdmin">' \
