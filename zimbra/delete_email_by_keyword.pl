@@ -10,6 +10,11 @@ use Getopt::Std;
 
 sub print_usage();
 
+if (`whoami` !~ /^root/) {
+    print "run as root!\n\n";
+    exit;
+}
+
 my %opts;
 
 getopts('u:f:s:n', \%opts);
