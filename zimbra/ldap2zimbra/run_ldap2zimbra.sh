@@ -3,7 +3,8 @@
 # Morgan Jones (morgan@morganjones.org)
 # $Id$
 
-base_path=ldap2zimbra-dmail01
+# base_path=ldap2zimbra-dmail01
+base_path=`echo $0 | awk -F/ '{for (i=1;i<NF;i++){printf $i "/"}}' | sed 's/\/$//'`
 log_path=${base_path}/log
 log=${log_path}/ldap2zimbra_`date +%y%m%d.%H:%M:%S`
 
