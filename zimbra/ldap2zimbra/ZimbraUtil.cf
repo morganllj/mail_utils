@@ -158,6 +158,9 @@ $z2l = {
     "displayname" =>               \&build_last_first,
     "zimbrapreffromdisplay" =>     \&build_last_first,
 
+    "zimbraarchiveaccount" =>      \&build_archive_account,
+    "amavisarchivequarantineto" => \&build_archive_account,
+
 # provision a split domain account:
 #    "zimbramailhost" =>            \&build_org_zmailhost,
 #    "zimbraarchiveaccount" =>      \&build_archive_account,
