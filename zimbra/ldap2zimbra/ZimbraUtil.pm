@@ -34,7 +34,7 @@ my %subset;
 my $ldap;
 my @exclude_list;
 our $archive_name_attr;
-my $archive_z2l;
+our $archive_z2l;
 my $zimbra_limit_filter;  # TODO: how is this used?
 my $context;
 
@@ -1433,7 +1433,6 @@ sub add_to_all_users {
 ######
 # ignore argument
 sub get_z_archive_mailhost($) {
-
     return $z_params{z_archive_mailhost};
 }
 
