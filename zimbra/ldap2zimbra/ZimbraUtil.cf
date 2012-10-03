@@ -34,7 +34,8 @@ use ZimbraUtil;
 #  called "ldap2zimbra" you'll need to create a directory within that
 #  directory and put its name here.  This is to work around problems
 #  with IPC in Perl.  I'm not thrilled about it but it does work
-#  reliably.
+#  reliably.  It's bad form, I know, but prefix with a '/' even
+#  though it's relative.
 $relative_child_status_path = "/child_status";
 
 $in_multi_domain_mode = 0; # use uid attribute and concat the domain provided by ldap2zimbra
@@ -45,10 +46,10 @@ $create_archives = 1; # create archive accounts
 
 # ldap defaults
 %l_params = (
-      l_host => "ldap0.domain.org",
-      l_binddn => "cn=directory manager",
+      l_host => "hostname",
+      l_binddn => "cn=directory manager",  # or equivalent
       l_bindpass => "pass",
-      l_base => "dc=domain,dc=org",
+      l_base => "basedn",
 
      # debugging:
 #    l_filter =>
@@ -66,12 +67,12 @@ $exclude_group_rdn = "cn=orgexcludes";  # assumed to be in $ldap_base
 
 # Zimbra defaults
 %z_params = (
-    z_server => "dmail01.domain.org",
+    z_server => "hostname",
     z_pass => "pass",
-    z_domain => "dev.domain.org",  # mail domain, ignored if $in_multi_domain_mode == 1
+    z_domain => "domain.org",  # mail domain, ignored if $in_multi_domain_mode == 1
 #    z_domain => "domain.org",  # mail domain, ignored if $in_multi_domain_mode == 1
 # leave archive_mailhost blank if you do not use Zimbra Archiving
-    z_archive_mailhost => "dmail01.domain.org",
+    z_archive_mailhost => "hostname",
     z_archive_suffix => "archive",
 #     # TODO: look up cos by name instead of requiring the user enter the cos id.
 #     # production:
@@ -160,6 +161,8 @@ $z2l = {
 
     "zimbraarchiveaccount" =>      \&build_archive_account,
     "amavisarchivequarantineto" => \&build_archive_account,
+
+    "zimbramailhost" =>            \&build_org_zmailhost,	
 
 # provision a split domain account:
 #    "zimbramailhost" =>            \&build_org_zmailhost,
