@@ -10,6 +10,10 @@
 # Zimbra.  attributes mastered by Zimbra do not go to LDAP.
 # See ZimbraUtil.cf for customization for your environment.
 
+# The Zimbra SOAP libraries.  Download the Zimbra source code to get
+# them.
+use lib "/usr/local/zcs-6.0.7_GA_2483-src/ZimbraServer/src/perl/soap";
+
 #######
 my $script_dir;
 BEGIN {
@@ -21,13 +25,6 @@ BEGIN {
         unshift @INC, $script_dir;
     }
 }
-
-##################################################################
-#### Site-specific settings
-#
-# The Zimbra SOAP libraries.  Download and uncompress the Zimbra
-# source code to get them.
-use lib "/usr/local/zcs-6.0.7_GA_2483-src/ZimbraServer/src/perl/soap";
 
 use strict;
 use Getopt::Std;
