@@ -17,7 +17,7 @@ if (`whoami` !~ /^root/) {
 
 my %opts;
 
-getopts('u:f:s:n', \%opts);
+getopts('u:f:s:nl:', \%opts);
 
 $opts{s} || print_usage();
 my $srch_str = $opts{s};
@@ -44,7 +44,11 @@ print "searching for \"$srch_str\" in mailbox(es) " . join (',', @users), "..\n\
 
 for my $u (sort @users) {
     print "\n$u..\n";
-    my $rslt = `su - zimbra -c "zmmailbox -z -m $u search -l 1000 -t message \\"$srch_str\\""`;
+    my $rslt;
+
+#    if (exists $opts{l}) {
+    $rslt = `su - zimbra -c "zmmailbox -z -m $u search -l 1000 -t message \\"$srch_str\\""`;
+
 
     for (split /\n/, $rslt) {
 	if (/^num:/ && /more: true/) {
@@ -53,6 +57,9 @@ for my $u (sort @users) {
 	    my $msg_id=$1;
 	    s/mess\s*//;
 	    s/\s*\d+\.//;
+	    if (exists $opts{l}) {
+		next unless (/$opts{l}/);
+	    }
 	    print "$u: $_\n";
 	    unless (exists $opts{n}) {
 		system "su - zimbra -c \"zmmailbox -z -m $u deletemessage $msg_id\"";
@@ -66,7 +73,14 @@ for my $u (sort @users) {
 
 
 sub print_usage () {
-    print "usage: $0 -u <user1,user2..> | -f <user list file> -s <search string>\n";
+    print "usage: $0 [-n] [-l limit] -u <user1,user2..> | -f <user list file> -s <search string>\n";
+    print "\t-n print, do not modify\n";
+    print "\t-u list users on the command line, comma separated\n";
+    print "\t-f text file containing users, carriage return separated\n";
+    print "\t-l limit, supply a string to limit messages to be deleted--perl regex format\n";
+    print "\t\tTo limit by date: -l 07/09/12\n";
+    print "\t-s search string, list of words to look for in the email--not an exact string\n";
+
     exit;
 }
 

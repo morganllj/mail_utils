@@ -25,9 +25,12 @@ my %primary =   (host=>"production host",
 my %secondary = (host=>"dev host",
                  pass=>"pass");
 
+my $basedn = "ou=people,dc=domain,dc=org";
+my $domain = "domain.org";
+
 my (%p_users, %s_users, %p_lists, %s_lists);
 
-my $srch_base = "ldapsearch -x -w 00pass00 -h 00host00 -D uid=zimbra,cn=admins,cn=zimbra -Lb ou=people,dc=domain,dc=org";
+my $srch_base = "ldapsearch -x -w 00pass00 -h 00host00 -D uid=zimbra,cn=admins,cn=zimbra -Lb " . $basedn;
 my $srch = $srch_base. " objectclass=* uid objectclass zimbramailforwardingaddress mail";
 
 my $whoami=`whoami`;
@@ -64,7 +67,7 @@ open ZM, "|zmprov" || die "problem opening pipe to zmprov.."
 for my $a (sort keys %s_users) {
     next 
         unless !exists $p_users{$a};
-    my $cmd = "da $a\@domain.org";
+    my $cmd = "da $a\@". $domain;
     print $cmd . "\n";
     print ZM $cmd . "\n"
         unless (exists $opts{n});
@@ -74,7 +77,7 @@ for my $a (sort keys %s_users) {
 ## add/modify users
 for my $a (sort keys %p_users) {
     if (!exists $s_users{$a}) {
-	 my $cmd = "ca $a\@domain.org \"\" zimbramailtransport smtp:smtp.domain.org:25";
+	 my $cmd = "ca $a\@". $domain ." \"\" zimbramailtransport smtp:smtp." . $domain . ":25";
 
 	 print $cmd . "\n";
 	 print ZM $cmd . "\n"
@@ -110,14 +113,14 @@ for my $a (sort keys %p_users) {
 
 ## add/modify dist lists
 for my $a (sort keys %p_lists) {
-#    my $add_mod_str = $a. "\@domain.org zimbraMailForwardingAddress ". 
+#    my $add_mod_str = $a. "\@" . $domain. " zimbraMailForwardingAddress ". 
 #      join (' zimbraMailForwardingAddress ', sort @{$p_lists{$a}});
 
     my $p_str = build_dist_list_str("zimbraMailForwardingAddress", @{$p_lists{$a}});
     next      # don't create empty lists.
         if ($p_str =~ /^\s*$/);
 
-    my $add_mod_str = $a. "\@domain.org zimbraMailForwardingAddress ". 
+    my $add_mod_str = $a. "\@" . $domain . " zimbraMailForwardingAddress ". 
       $p_str;
     $add_mod_str .= " zimbraHideInGal TRUE zimbraMailStatus disabled"
         if ($a =~ /^all-/);
@@ -150,13 +153,13 @@ for my $a (sort keys %p_lists) {
 	    my $found = 0;
 	    next if ($p_alias =~ /zimbraMailForwardingAddress/i);
 	    for my $s_alias (@{$s_lists{$a}}) {
-		next if ($s_alias eq $a . "\@domain.org");
+		next if ($s_alias eq $a . "\@" . $domain);
 		$found = 1 if ($p_alias eq $s_alias);
 	    }
 	    # addDistributionListAlias(adla) {list@domain|id} {alias@domain}
 	    
 	    $p_alias =~ s/mail:\s*//;
-	    my $adla_cmd = "adla ". $a . "\@domain.org " . $p_alias;
+	    my $adla_cmd = "adla ". $a . "\@" . $domain . " " . $p_alias;
 	    if (!$found) {
 		print $adla_cmd, "\n";
 		print ZM $adla_cmd, "\n"
@@ -170,7 +173,7 @@ for my $a (sort keys %p_lists) {
 ## delete dist lists
 for my $a (sort keys %s_lists) {
     if (!exists ($p_lists{$a})) {
-	my $cmd = "ddl $a\@domain.org";
+	my $cmd = "ddl $a\@" . $domain;
 	print $cmd . "\n";
 	print ZM $cmd . "\n"
 	  unless (exists $opts{n});
@@ -189,9 +192,9 @@ close (ZM);
 sub create_alias {
     my ($a, $alias) = @_;
 
-    return if (lc $a . "\@domain.org" eq $alias);
+    return if (lc $a . "\@" . $domain eq $alias);
 
-    my $cmd = "aaa $a\@domain.org $alias";
+    my $cmd = "aaa $a\@" . $domain . "$alias";
     print $cmd . "\n";
     print ZM $cmd . "\n"
         unless (exists $opts{n});

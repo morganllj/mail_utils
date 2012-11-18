@@ -11,7 +11,6 @@ use Getopt::Std;
 
 my $opts;
 getopts('hp:i:D:w:nB:', \%$opts);
-# Options that require an argument have a trailing colon in the example above.
 
 my $default_ldap_port = 389;
 my $default_bind_dn   = "cn=Directory Manager";

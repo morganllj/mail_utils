@@ -36,13 +36,11 @@ if ($who ne "zimbra") {
 
 
 #$pid = open2(*R, *W, "zmmailbox -z -m $acct");
-open2(*R, *W, "zmmailbox -z -m $acct");
-
-
-
+my $pid = open2(*R, *W, "zmmailbox -z -m $acct");
 
 my $last_date;
 my $done = 0;
+my $count=1000;
 
 while (!$done) {
     if (!defined $last_date) {
@@ -53,19 +51,30 @@ while (!$done) {
 
     my $d;
     while (<R>) {
-	if (/^\s*\d+\./ && /(\d+\/\d+\/\d+)/) {
-	    ($d)=/(\d+\/\d+\/\d+)/;
+	if (/^\s*\d+\./ && /(\d+\/\d+\/\d+)\s+\d+:\d+/) {
+#	    ($d)=/(\d+\/\d+\/\d+)/;
+
+	    ($d) = /(\d+\/\d+\/\d+)\s+\d+:\d+/
 	} else {
 	    last 
 	      if (defined $d);
 	}
 
-	$done = 1 if (/more:\s*false/);
+	if (/more:\s*false/) {
+	    $done = 1;
+	    last
+	}
     }
     
-    $last_date = $d;
+    $last_date = $d if (defined $d);
+#    print $last_date . "\n";
 }
-print $last_date;
+
+close(R);
+close(W);
+waitpid($pid, 0);
+print $last_date . "\n";
+
 
 
 sub print_usage() {

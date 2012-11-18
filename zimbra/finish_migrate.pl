@@ -5,6 +5,7 @@ use strict;
 use Getopt::Std;
 
 my $mailhost="mail01.domain.org";
+#my $mailhost="dmail01.domain.org";
 my $zimbra_ldaphost="mldap01.domain.org";
 my $zimbra_binddn = "uid=zimbra,cn=admins,cn=zimbra";
 my $zimbra_searchbase = "dc=domain,dc=org";
@@ -19,7 +20,7 @@ getopts('u:l:n', \%opts);
 exists $opts{l} || print_usage();
 exists $opts{u} || print_usage();
 
-exists $opts{n} && print "-n used, no changes will be made to active account(s).\n";
+exists $opts{n} && print "-n used, no changes will be made to active account(s).\nRestore to alternate will occur.\n";
 
 my $bkp_str;
 for my $u (split /\s*,\s*/, $opts{u}) {
@@ -27,14 +28,41 @@ for my $u (split /\s*,\s*/, $opts{u}) {
 }
 chop $bkp_str;
 
-my $cmd = "sudo su - zimbra -c \"zmrestore -t /var/tmp/backup -c -ca -pre ".$restore_pre." --ignoreRedoErrors -lb $opts{l} -a $bkp_str\"";
+print "\n";
+
+for my $u (split /\s*,\s*/, $opts{u}) {
+    my $a = $u . "\@domain.org ";
+
+#    if (! `sudo su - zimbra -c "zmprov ga hld_$u\@domain.org" 2>&1|grep ERR`) {
+    my $r = `sudo su - zimbra -c "zmprov ga hld_$u\@domain.org" 2>&1|grep ERR`;
+    if (!$r) {
+        my $d = "sudo su - zimbra -c \"zmprov da hld_$u\""; 
+        print "$d\n";
+	system ($d) if (!exists $opts{n});
+    }
+
+#    if (! `sudo su - zimbra -c "zmprov ga ${restore_pre}$u\@domain.org|grep ERR"`) {
+    my $r2 = `sudo su - zimbra -c "zmprov ga ${restore_pre}$u\@domain.org" 2>&1|grep ERR`;
+    if (!$r2) {
+	my $d2 = "sudo su - zimbra -c \"zmprov da ". $restore_pre ."$u\@domain.org\""; 
+	print "$d2\n";
+	system ($d2);
+    }
+}
+
+
+my $cmd = "sudo su - zimbra -c \"zmrestore -t /var/tmp/backup -c -ca -pre ".$restore_pre.
+  " --ignoreRedoErrors -lb $opts{l} -a $bkp_str\"";
 print "$cmd\n";
 
-
 my $result = `$cmd 2>&1`;
- print $result;
- die "restore failed.. " 
-     if ($result =~ /have not been restored/ || $result =~ /Error/);
+print $result;
+if (exists $opts{n}) {
+    print "restore failed, continuing..\n";
+} else {
+    die "restore failed.. " 
+        if ($result =~ /have not been restored/ || $result =~ /Error/);
+}
 
 print "\n";
 
@@ -45,9 +73,10 @@ for my $u (split /\s*,\s*/, $opts{u}) {
     my @dist_lists = split /mail:\s/, $lists;
     shift @dist_lists;
     for my $l (@dist_lists) { 
-        chomp $l;
-        $l =~ s/mail:\s+//
+	chomp $l;
+	$l =~ s/mail:\s+//
     }
+
 
     my $c = "sudo su - zimbra -c \"zmprov ra $a hld_${a}\""; 
     print "$c\n";
@@ -60,16 +89,16 @@ for my $u (split /\s*,\s*/, $opts{u}) {
     my $c1 = "sudo su - zimbra -c \"zmprov ma $a zimbramailtransport lmtp:$mailhost:7025\"";
     print "$c1\n";
     if (!exists($opts{n})) { system ($c1); }
-    my $c2 = "sudo su - zimbra -c \"zmprov ma $a zimbramailhost $mailhost zimbraaccountstatus active\"";
+ 
+   my $c2 = "sudo su - zimbra -c \"zmprov ma $a zimbramailhost $mailhost zimbraaccountstatus active\"";
     print "$c2\n";
-
     if (!exists($opts{n})) { system ($c2); }
     print "\n";
 
     for my $l (@dist_lists) {
-        my $c3 = "sudo su - zimbra -c \"zmprov adlm $l $a\"";
-        print "$c3\n";
-        if (!exists($opts{n})) { system($c3); }
+	my $c3 = "sudo su - zimbra -c \"zmprov adlm $l $a\"";
+	print "$c3\n";
+	if (!exists($opts{n})) { system($c3); }
     }
 
     print "\n";

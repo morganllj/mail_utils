@@ -48,6 +48,12 @@ chomp $label;
 print "\n";
 print "label: $label\n";
 
+if ($label !~ /^full-/) {
+    print "invalid label,  exiting.\n";
+    exit;
+}
+    
+
 # wait for the backup to finish
 my $status;
 while (1) {
@@ -68,7 +74,7 @@ while (1) {
 
 # transfer to copy_to host
 print "transferring..\n";
-system ("sudo su - zimbra -c \"tar cf - backup/sessions/$label\"| ssh zimbra\@$copy_to \"cd /var/tmp && tar xf -\"");
+system ("sudo su - zimbra -c \"tar cf - backup/accounts.xml backup/sessions/$label\"| ssh zimbra\@$copy_to \"cd /var/tmp && tar xf -\"");
 print "done.\n";
 
 
