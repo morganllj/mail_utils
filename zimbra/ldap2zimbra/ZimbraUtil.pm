@@ -534,7 +534,6 @@ sub add_user {
     # TODO: define a 'required' attribute in user definable section above.
 #    unless (defined build_target_z_value($lu, "orgghrsintemplidno", $z2l)) {
     if ($create_archives) {
-#        unless (defined build_target_z_value($lu, $archive_name_attr, $z2l)) {
         unless (defined build_target_z_value($archive_name_attr, $z2l, $lu)) {
             print "\t***no $archive_name_attr ldap attribute.  Archives can't be created.  Not adding.\n";
             return;
@@ -547,13 +546,11 @@ sub add_user {
     if (in_multi_domain_mode()) {
         $an = $lu->get_value("mail");
     } else {
-#        $an = $lu->get_value("uid")."@".get_z_domain();
         $an = get_printable_value($lu, "uid")."@".get_z_domain();
     }
     $d->add('name', $MAILNS, undef,$an);
 
     for my $zattr (sort keys %$z2l) {
-#	my $v = build_target_z_value($lu, $zattr, $z2l);
 	my $v = build_target_z_value($zattr, $z2l, $lu);
 
 	if (!defined($v)) {
@@ -681,7 +678,6 @@ sub add_archive_acct {
     my $archive_account = build_archive_account($lu);
 
     print "adding archive: ", $archive_account,
-#        " for ", $lu->get_value("uid"), "\n";
         " for ", get_printable_value($lu,"uid"), "\n";
     print "writing newly created archive to parent ($$): $archive_account\n"
 	if (exists $g_params{g_debug});
@@ -691,11 +687,9 @@ sub add_archive_acct {
     $d3->start('CreateAccountRequest', $MAILNS);
     $d3->add('name', $MAILNS, undef, $archive_account);
 
-
     for my $zattr (sort keys %$z2l) {
 	my $v;
 
-#	$v = build_target_z_value($lu, $zattr, $z2l);
 	$v = build_target_z_value($zattr, $z2l, $lu);
 
 	if (!defined($v)) {
@@ -1587,7 +1581,6 @@ sub build_archive_account($) {
     shift if ((ref $_[0]) eq __PACKAGE__);
     my $lu = shift;
 
-#    return $lu->get_value("orgghrsintemplidno")."\@".get_z_domain().".".$z_params{z_archive_suffix};
     return get_printable_value($lu, "orgghrsintemplidno")."\@".get_z_domain().".".$z_params{z_archive_suffix};
 }
 
