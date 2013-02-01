@@ -47,7 +47,7 @@ $create_archives = 1; # create archive accounts
 # ldap defaults
 %l_params = (
       l_host => "hostname",
-      l_binddn => "cn=directory manager",  # or equivalent
+      l_binddn => "cn=service account",  # needs appropriate privilege of course
       l_bindpass => "pass",
       l_base => "basedn",
 
@@ -186,4 +186,7 @@ $archive_z2l = {
     # TODO: add cn, givenname and sn here so a search by user's name shows the archive..
     "zimbramailhost" => \&get_z_archive_mailhost,
     "zimbracosid"    => \&get_archive_cos_id,
+    "cn" =>                    ["cn"],
+    "givenname" =>             ["givenname"],
+    "sn" =>                    ["sn"],
 };
