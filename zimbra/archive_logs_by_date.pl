@@ -13,7 +13,7 @@ print "-d used, debugging will be printed.\n"
 
 my @hosts=qw/mail01 mail02 mail03 mail04 mail05/;
 #my @hosts=qw/mail01/;
-my @logs=qw/nginx.log/;
+my @logs=qw/nginx.log nginx.access.log/;
 my $dest="/var/mail_log/nginx";
 my $src="/opt/zimbra/log";
 
