@@ -1,7 +1,5 @@
 #!/usr/bin/perl -w
 #
-# http://wiki.zimbra.com/wiki/Account_mailbox_database_structure
-#
 use strict;
 use Data::Dumper;
 
@@ -10,7 +8,7 @@ if (defined $ARGV[0]) {
     $account = $ARGV[0];
 } else {
     print "usage: $0 <account>";
-    exit;
+    exit 1;
 }
 
 my %vols;
@@ -26,6 +24,22 @@ if (!defined $mailboxId) {
 }
 
 my $mboxgroup = $mailboxId % 100;
+
+# zmprov getMailboxInfo returns a number regardless of the user's store.  Make sure the user is on this store:
+my $verify_store = `echo "select id,comment from mailbox where id=$mailboxId" | mysql zimbra`;
+my @verify_store = split /\n/, $verify_store;
+
+if ($#verify_store > 1) {
+    print "too many values were returned for id=$mailboxId from zimbra.mailbox database:\n";
+    print $verify_store . "\n";
+    exit 1;
+} elsif ($#verify_store == 1) {
+    my $verify_account = (split /\s+/, $verify_store[1])[1];
+#    print "comparing /$account/ and /$verify_account/\n";
+    if ($account ne $verify_account) {
+	die "$account doesn't appear to be on this host\n";
+    }
+}
 
 for (split /\n/,
 	`echo "select id,mailbox_id,volume_id,mod_content,subject from mail_item where mailbox_id=$mailboxId and type!=1;" | mysql mboxgroup$mboxgroup`) {
