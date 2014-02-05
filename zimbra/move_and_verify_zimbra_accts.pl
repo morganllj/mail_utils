@@ -32,7 +32,7 @@ my $count;
 
 print "-e specified, only even records will be moved\n"
   if (exists $opts{e} && !exists $opts{a});
-print "-o specified, only even records will be moved\n"
+print "-o specified, only odd records will be moved\n"
   if (exists $opts{o} && !exists $opts{a});
 
 if (exists $opts{c} && ! exists $opts{a}) {
@@ -119,7 +119,7 @@ sub move_and_purge($) {
     print "dumping file list for ${account} " . `date`;
     if (!exists $opts{n}) {
 	die "dumping db file list for $account failed."
-	  if (system ("./find_zimbra_db_files.pl -a $account > $output_file") != 0)
+	  if (system ($script_dir . "/find_zimbra_db_files.pl -a $account > $output_file") != 0)
     }
 
     print "dumped ${account}'s file list, now moving " . `date`;
@@ -129,7 +129,7 @@ sub move_and_purge($) {
 	}
     }
 
-    print "files moved, purging mailbox" . `date`;
+    print "files moved, purging mailbox " . `date`;
     if (!exists $opts{n}) {
 	if (system ("zmpurgeoldmbox -a $account") != 0) {
 	    die "purging $account mailbox failed failed";
