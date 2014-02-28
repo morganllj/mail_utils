@@ -20,8 +20,9 @@ require "timelocal.pl";
 sub print_usage();
 sub get_concise_time($);
 
+
 my %opts;
-getopts('f:p:w:c:d', \%opts);
+getopts('f:p:w:c:di:e:', \%opts);
 
 my $filename = $opts{f} || print_usage();
 my $time_period = $opts{p} || print_usage(); # start parsing $time_period 
@@ -29,8 +30,20 @@ my $time_period = $opts{p} || print_usage(); # start parsing $time_period
 my $warn_level = $opts{w} || print_usage();
 my $critical_level = $opts{c} || print_usage();
 
+if (exists $opts{e}) {
+    print "-e not yet implemented.\n";
+    exit (1);
+}
+
 print "-d used, printing debugging..\n\n"
   if (exists $opts{d});
+
+my @include_domains;
+if (exists $opts{i}) {
+    @include_domains = split /\s*,\s*/, $opts{i};
+    print "only alerting for these domains: ", join " ", @include_domains, "\n"
+      if ($opts{d});
+}
 
 my %mon2num = qw( Jan 0  Feb 1  Mar 2  Apr 3  May 4  Jun 5 Jul 6 Aug 7 Sep 8 
                   Oct 9 Nov 10 Dec 11 );
@@ -68,10 +81,18 @@ while (<IN>) {
 		$printed_first = 1;
 	    }
 
-	    if (exists $addrs{lc $addr}) {
-		$addrs{lc $addr}++;
-	    } else {
-		$addrs{lc $addr} = 1;
+
+	    my $addr_domain = (split (/\@/, $addr))[-1];
+
+#	    print "/$addr/ /$addr_domain/\n";
+
+
+	    if (!exists $opts{i} || grep /\Q$addr_domain\E/i, @include_domains) {
+		if (exists $addrs{lc $addr}) {
+		    $addrs{lc $addr}++;
+		} else {
+		    $addrs{lc $addr} = 1;
+		}
 	    }
 	}
 }
@@ -81,10 +102,8 @@ my $rc=0;
 my @status;
 
 for my $addr (sort keys %addrs) {
-
     push @status, $addr . " " . $addrs{$addr}
       if ($addrs{$addr} >= $warn_level || $addrs{$addr} >= $critical_level);
-
     $rc = 1
       if (($addrs{$addr} >= $warn_level) && ($rc < 1) );
     $rc = 2
@@ -105,18 +124,24 @@ print join (' ', @status), "\n";
 exit $rc;
 
 
-
 ######
 sub print_usage() {
-    print "\n";
     print "usage:\n";
     print "$0 [-d] -p <time period> -w <warn level> -c <critical level> -f <filename>\n";
-    print "\t[-d] print debug output, optional\n";
-    print "\t-p <time period> look back this many minutes in the log file\n";
-    print "\t-f <filename> log filename to open\n";
-    print "\t[-w <level>] warn level\n";
-    print "\t[-c <level>] critial level\n";
+    print "\t[-e domain1,domain2,... -i domain1,domain2,...]\n";
+    print "\n";
+    print "[-d] print debug output, optional\n";
+    print "-p <time period> look back this many minutes in the log file\n";
+    print "-f <filename> log filename to open\n";
+    print "[-w <level>] warn level\n";
+    print "[-c <level>] critial level\n";
+    print "[-e domain1,domain2,... -i domain1,domain2,...] exclude (-e) or include (-i)\n";
+    print "\tdomains from/for alarming.\n";
+    print "\t-e is not implemented.\n";
+    
     print "\n";
 
     exit;
 }
+
+
