@@ -8,16 +8,29 @@ use XmlDoc;
 use Soap;
 use Net::LDAP;
 use Data::Dumper;
-use lib '/home/admin/ldap2zimbra-dmail01';
+use lib '/home/admin/ldap2zimbra';
 use ZimbraUtil;
 use Getopt::Std;
 
 my %opts;
 
-getopts('n', \%opts);
+sub printUsage();
+
+getopts('nd:f:', \%opts);
 
 print "-n used, no changes will be made\n"
   if (exists $opts{n});
+
+exists $opts{f} || printUsage();
+
+my $ldap_host = "ldaps://sgldap01.domain.net";
+my $ldap_bind_dn = "cn=directory manager";
+my $ldap_bind_pw = "pass";
+my $domain = "domain.org";
+my $ldap_base = "dc=domain,dc=org";
+$forwarding_domain = "\@gmail-zgate-domain.domain.org";
+
+my $filter = $opts{f};
 
 my $zu = new ZimbraUtil;
 
@@ -53,7 +66,7 @@ my $domain_id;
       my $domain = (values %{$child->attrs()})[0];
 
       $domain_id = (values %{$child->attrs()})[1]
-	if ($domain eq "dev.domain.org");
+	if ($domain =~ /^$domain$/i);
     }
 
 my %in_zimbra;
@@ -68,20 +81,21 @@ my $r4 = $zu->check_context_invoke($d4, \$context);
 for my $child (@{$r4->children()}) {
     my $dist_list =  (values %{$child->attrs()})[0];
 
-    if ($dist_list =~ /^\d+\@dev.domain.org/) {
-	$in_zimbra{$dist_list} = 1;
-    }
+    $in_zimbra{$dist_list} = 1
+      if ($dist_list =~ /^\d+\@$domain/i);
 }
 
 
  print "\nsearching ldap...\n";
- my $ldap = Net::LDAP->new("ldaps://testsgldap-mgmt.domain.net") or die "$@";
- $ldap->bind(dn=>"cn=directory manager", password=>"pass");
+ my $ldap = Net::LDAP->new("$ldap_host") or die "$@";
+ $ldap->bind(dn=>$ldap_bind_dn, password=>$ldap_bind_pw);
 
- my $sr = $ldap->search(base => "dc=domain,dc=org", filter => "(&(objectclass=orgStudent)(mail=*))", 
-		      attrs => "uid");
+ # my $sr = $ldap->search(base => "dc=domain,dc=org", filter => "(&(objectclass=orgStudent)(mail=*))", 
+ # 		      attrs => "uid");
 # my $sr = $ldap->search(base => "dc=domain,dc=org", filter => "(&(objectclass=orgStudent)(orghomeorgcd=2540)(mail=*))", 
 #		      attrs => "uid");
+ my $sr = $ldap->search(base => $ldap_base, filter => $filter, 
+		      attrs => "uid");
 
  my $s = $sr->as_struct();
 
@@ -91,7 +105,7 @@ my %in_ldap;
 for my $dn (keys %$s) {
      my $mail = $s->{$dn}->{mail}[0];
      my $addr = $s->{$dn}->{mail}[0];
-     $addr =~ s/domain/dev.domain/;
+#     $addr =~ s/domain/dev.domain/;
      $in_ldap{$addr} = 1;
  }
 
@@ -103,7 +117,8 @@ for my $addr (sort keys %in_ldap) {
 	    my $d1 = new XmlDoc;
 
 	    my $uid = (split /\@/, $addr)[0];
-	    my $remote_addr = $uid . "\@gmail-zgate-domain.dev.domain.org";
+#	    my $remote_addr = $uid . "\@gmail-zgate-domain.domain.org";
+	    my $remote_addr = $uid . "\@" . $forwarding_domain;
 
 	    $d1->start('CreateDistributionListRequest', $MAILNS);
 	    $d1->add('name', $MAILNS, undef, $addr);
@@ -197,3 +212,12 @@ for my $addr (sort keys %in_zimbra) {
 }
 
 print "\nfinished at ", `date`;
+
+
+
+sub printUsage() {
+    
+    print "\nusage: $0 [-n] -f <ldap filter>\n\n";
+    exit;
+    
+}
