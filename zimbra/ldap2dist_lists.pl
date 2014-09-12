@@ -16,19 +16,22 @@ my %opts;
 
 sub printUsage();
 
-getopts('nd:f:', \%opts);
+getopts('ndf:', \%opts);
+
+print "f: $opts{f}\n";
+exists $opts{f} || printUsage();
 
 print "-n used, no changes will be made\n"
   if (exists $opts{n});
-
-exists $opts{f} || printUsage();
+print "-d used, no dist lists will be deleted\n"
+  if (exists $opts{d});
 
 my $ldap_host = "ldaps://sgldap01.domain.net";
 my $ldap_bind_dn = "cn=directory manager";
 my $ldap_bind_pw = "pass";
 my $domain = "domain.org";
 my $ldap_base = "dc=domain,dc=org";
-$forwarding_domain = "\@gmail-zgate-domain.domain.org";
+my $forwarding_domain = "gmail-zgate-domain.domain.org";
 
 my $filter = $opts{f};
 
@@ -169,46 +172,47 @@ for my $addr (sort keys %in_ldap) {
     
 }
 
-for my $addr (sort keys %in_zimbra) {
-    if (!exists $in_ldap{$addr}) {
-	print "removing $addr\n";
+unless (exists ($opts{d})) {
+    for my $addr (sort keys %in_zimbra) {
+	if (!exists $in_ldap{$addr}) {
+	    print "removing $addr\n";
 
-	unless (exists $opts{n}) {
-	    my $d1 = new XmlDoc;
+	    unless (exists $opts{n}) {
+		my $d1 = new XmlDoc;
 	
-	    $d1->start('GetDistributionListRequest', $MAILNS);
-	    $d1->add('dl', $MAILNS, { "by" => "name"}, $addr );
-	    $d1->add('a', $MAILNS, {"n" => "zimbraMailStatus"}, "enabled");
-	    $d1->end;
+		$d1->start('GetDistributionListRequest', $MAILNS);
+		$d1->add('dl', $MAILNS, { "by" => "name"}, $addr );
+		$d1->add('a', $MAILNS, {"n" => "zimbraMailStatus"}, "enabled");
+		$d1->end;
 	    
-	    my $r = $zu->check_context_invoke($d1, \$context);
-	    # TODO: error checking!
+		my $r = $zu->check_context_invoke($d1, \$context);
+		# TODO: error checking!
 
-	    if ($r->name eq "Fault") {
+		if ($r->name eq "Fault") {
 
-		my $rsn = $zu->get_fault_reason($r);
-		print "Error getting dist list while removing $addr, skipping.  Reason: ", Dumper $r, "\n";
-		next;
-	    }
+		    my $rsn = $zu->get_fault_reason($r);
+		    print "Error getting dist list while removing $addr, skipping.  Reason: ", Dumper $r, "\n";
+		    next;
+		}
 
-	    my $z_id;
-	    for my $child (@{$r->children()}) {
-		$z_id = $child->attrs->{id};
-	    }
-
-	    my $d2 = new XmlDoc;
-	    $d2->start ('DeleteDistributionListRequest', $MAILNS);
-	    $d2->add ('id', $MAILNS, undef, $z_id);
-	    $d2->end;
+		my $z_id;
+		for my $child (@{$r->children()}) {
+		    $z_id = $child->attrs->{id};
+		}
+ 
+		my $d2 = new XmlDoc;
+		$d2->start ('DeleteDistributionListRequest', $MAILNS);
+		$d2->add ('id', $MAILNS, undef, $z_id);
+		$d2->end;
     
-	    my $r2 = $zu->check_context_invoke($d2, \$context);
-	    if ($r2->name eq "Fault") {
-		print "error removing $addr:\n";
-		print Dumper ($r2);
+		my $r2 = $zu->check_context_invoke($d2, \$context);
+		if ($r2->name eq "Fault") {
+		    print "error removing $addr:\n";
+		    print Dumper ($r2);
+		}
 	    }
 	}
     }
-
 }
 
 print "\nfinished at ", `date`;
@@ -216,8 +220,8 @@ print "\nfinished at ", `date`;
 
 
 sub printUsage() {
-    
-    print "\nusage: $0 [-n] -f <ldap filter>\n\n";
+    print "\nusage: $0 [-n][-d] -f <ldap filter>\n";
+    print "\t[-d] skip deletes\n";
+    print "\n";
     exit;
-    
 }
