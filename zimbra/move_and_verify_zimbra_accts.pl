@@ -5,7 +5,7 @@ use strict;
 use Getopt::Std;
 use Data::Dumper;
 
-sub move_and_purge($);
+sub move_and_purge(@);
 sub print_usage();
 
 my @script_dir = split /\//, $0;
@@ -88,7 +88,7 @@ while (<$in>) {
 	}
 
     if ($move_user) {
-	$total_size += $size;
+
 	
 	# if ($account =~ /archive$/) {
 	# 	my $acct = `ldapsearch -x -w pass -D uid=zimbra,cn=admins,cn=zimbra -LLLb "" -h mldap01.domain.org zimbraarchiveaccount=$account mail|grep mail:|head -1|awk '{print \$2}'`;
@@ -98,16 +98,19 @@ while (<$in>) {
 	print "\n", $account, " $size\n";
 	# }
 	
-	move_and_purge($account);
+	my $rc = move_and_purge($account, $count);
 	
+	$total_size += $size
+	  unless ($rc);
 	$count--;
     }
 } 
 
 
 
-sub move_and_purge($) {
+sub move_and_purge(@) {
     my $account = shift;
+    my $count = shift;
 
     if (! -f $script_dir . "/find_zimbra_db_files.pl") {
 	print "can't find find_zimbra_db_files.pl in $script_dir, please make sure it's in the same directory as $0\n";
@@ -116,10 +119,19 @@ sub move_and_purge($) {
 
     my $output_file = "/var/tmp/${account}_files.csv";
 
-    print "dumping file list for ${account} " . `date`;
+    print "($count account(s) left) " if (defined $count);
+    print "dumping file list for ${account}, " . `date`;
     if (!exists $opts{n}) {
 	die "dumping db file list for $account failed."
 	  if (system ($script_dir . "/find_zimbra_db_files.pl -a $account > $output_file") != 0)
+    }
+
+
+    if (!exists $opts{n}) {
+	if (-z $output_file || ! -e $output_file) {
+	    print "$output_file is empty or missing, not moving/purging ${account}\n";
+	    return 1;
+	}
     }
 
     print "dumped ${account}'s file list, now moving " . `date`;
@@ -155,7 +167,7 @@ sub move_and_purge($) {
     
 }
 
-# print "total_size: $total_size\n";
+print "\ntotal_size: $total_size\n";
 
 
 sub print_usage() {
