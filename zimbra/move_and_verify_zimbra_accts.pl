@@ -17,10 +17,22 @@ $script_dir = '/' . $script_dir if ($0=~/^\//);
 
 
 my %opts;
-getopts('oec:a:d:n', \%opts);
+getopts('oec:a:d:nu', \%opts);
 
-if (!exists $opts{d} || (!exists $opts{c} && !exists $opts{a})) {
-    print "you must specify either -c or -a and -d\n";
+# if (!exists $opts{d} || (!exists $opts{c} && !exists $opts{a})) {
+#     print "you must specify either -c or -a and -d\n";
+#     print_usage();
+# }
+
+my $whoami = `whoami`;
+chomp $whoami;
+if ($whoami ne "zimbra") {
+    print "run as zimbra!\n";
+    exit;
+}
+
+if (!exists $opts{c} && !exists $opts{a}) {
+    print "you must specify either -c or -a\n";
     print_usage();
 }
 
@@ -48,7 +60,7 @@ if (exists $opts{e} && exists $opts{o}) {
     print_usage();
 }
 
-my $dest = $opts{d};
+#my $dest = $opts{d};
 
 my $account_to_move;
 if (exists $opts{a}) {
@@ -73,30 +85,24 @@ while (<$in>) {
     my $length = () = split //, $n, -1;
     my $d = (split //, $n)[$length-2];
 
+
+
     if (($d !~ /^\d+$/) && (exists $opts{o} or exists $opts{e})) {
 	print "-e or -o specified and $account does not end in a number, it will be skipped.\n";
 	next;
     }
 
     my $move_user = 0;
-	if (
-	    (($d =~ /^\d+$/) &&
-	     ((exists $opts{o} && ($d % 2) == 1) ||
-	      (exists $opts{e} && ($d % 2) == 0))) ||
-	     (!exists $opts{o} && !exists $opts{e})) {
+    if (
+	(($d =~ /^\d+$/) &&
+	 ((exists $opts{o} && ($d % 2) == 1) ||
+	  (exists $opts{e} && ($d % 2) == 0))) ||
+	  (!exists $opts{o} && !exists $opts{e})) {
 	    $move_user = 1;
 	}
 
     if ($move_user) {
-
-	
-	# if ($account =~ /archive$/) {
-	# 	my $acct = `ldapsearch -x -w pass -D uid=zimbra,cn=admins,cn=zimbra -LLLb "" -h mldap01.domain.org zimbraarchiveaccount=$account mail|grep mail:|head -1|awk '{print \$2}'`;
-	# 	chomp $acct;
-	# 	print "\n", $acct, " ", $account, " $size\n";
-	# } else {
 	print "\n", $account, " $size\n";
-	# }
 	
 	my $rc = move_and_purge($account, $count);
 	
@@ -111,6 +117,27 @@ while (<$in>) {
 sub move_and_purge(@) {
     my $account = shift;
     my $count = shift;
+
+    my $dest;
+    if (exists $opts{d}) {
+	$dest = $opts{d};
+    } else {
+	my $last_digit = `zmprov ga $account zimbraarchiveaccount`;
+	$last_digit =~ /zimbraArchiveAccount: \d+(\d{1})/;
+	$last_digit = $1;
+	if ($last_digit == "0" || $last_digit == "1") {
+	    $dest = "mail01.domain.org";
+	} elsif ($last_digit == "2" || $last_digit == "3") {
+	    $dest = "mail02.domain.org";
+	} elsif ($last_digit == "4" || $last_digit == "5") {
+	    $dest = "mail03.domain.org";
+	} elsif ($last_digit == "6" || $last_digit == "7") {
+	    $dest = "mail04.domain.org";
+	} elsif ($last_digit == "8" || $last_digit == "9") {
+	    $dest = "mail05.domain.org";
+	}
+	print "destination host: $dest\n";
+    }
 
     if (! -f $script_dir . "/find_zimbra_db_files.pl") {
 	print "can't find find_zimbra_db_files.pl in $script_dir, please make sure it's in the same directory as $0\n";
@@ -172,10 +199,12 @@ print "\ntotal_size: $total_size\n";
 
 sub print_usage() {
     print "\n";
-    print "usage: $0 -d <destination host> \n";
-    print "\t-c <records to move> | -a <specific account to move> [ -o | -e ] [ -n ]\n";
+    print "usage: $0 -d <destination host> | -p \n";
+    print "\t-c <records to move> | -a <specific account to move> [ -o | -e ] [ -u ] [ -n ]\n";
     print "\n";
     print "\t-d <destination host> host to which to move account(s)\n";
+    print "\t-p pick host to which to move accounts based on last digit of archive account\n";
+    print "\t\t01: mail01, 2-3: mail02, 4-5: mail03, etc\n";
     print "\t-c <record count to move | -a <account to move>\n";
     print "\t\teither move an individual account or take a specified\n";
     print "\t\tnumber off the top of zmprov gqu `zmhostname`\n";
