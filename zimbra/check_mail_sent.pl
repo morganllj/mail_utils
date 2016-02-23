@@ -134,7 +134,7 @@ sub print_usage() {
     print "-p <time period> look back this many minutes in the log file\n";
     print "-f <filename> log filename to open\n";
     print "[-w <level>] warn level\n";
-    print "[-c <level>] critial level\n";
+    print "[-c <level>] critical level\n";
     print "[-e domain1,domain2,... -i domain1,domain2,...] exclude (-e) or include (-i)\n";
     print "\tdomains from/for alarming.\n";
     print "\t-e is not implemented.\n";
