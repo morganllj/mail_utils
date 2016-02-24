@@ -22,7 +22,7 @@ sub get_concise_time($);
 
 
 my %opts;
-getopts('f:p:w:c:di:e:', \%opts);
+getopts('f:p:w:c:di:e:t', \%opts);
 
 my $filename = $opts{f} || print_usage();
 my $time_period = $opts{p} || print_usage(); # start parsing $time_period 
@@ -71,6 +71,9 @@ while (<IN>) {
 
 	    my ($l_mon, $l_day, $l_hour, $l_min, $l_sec) = 
 	      /([a-z]{3})\s+(\d{1,2})\s(\d{2}):(\d{2}):(\d{2})/i;
+            next
+#              if (!defined $l_day);
+	    if (!defined $l_mon || !defined $l_day || !defined $l_hour || !defined $l_min || !defined $l_sec);
 	    my $line_time =
 	      timelocal($l_sec, $l_min, $l_hour, $l_day, $mon2num{$l_mon}, $year);
 	    next unless ($line_time > ($end_time - ($time_period * 60)));
@@ -81,11 +84,7 @@ while (<IN>) {
 		$printed_first = 1;
 	    }
 
-
 	    my $addr_domain = (split (/\@/, $addr))[-1];
-
-#	    print "/$addr/ /$addr_domain/\n";
-
 
 	    if (!exists $opts{i} || grep /\Q$addr_domain\E/i, @include_domains) {
 		if (exists $addrs{lc $addr}) {
@@ -111,7 +110,7 @@ for my $addr (sort keys %addrs) {
 }
 
 if ($rc == 0) {
-    print "OK\n";
+    print "OK";
 } elsif ($rc == 1) {
     print "WARNING ";
 } elsif ($rc == 2) {
@@ -120,7 +119,24 @@ if ($rc == 0) {
     print "UNKNOWN ";
 }
 
-print join (' ', @status), "\n";
+print join (' ', @status);
+
+if (exists $opts{t}) {
+    my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) = gmtime (time);
+
+    $year += 1900;
+
+    $sec = 0 . $sec if ($sec<10);
+    $min = 0 . $min if ($min<10);
+    $hour = 0 . $hour if ($hour<10);
+    $mon++;
+    $mon = 0 . $mon if ($mon<10);
+
+    my $timestamp = join '', ($year,$mon,$mday,$hour,$min,$sec,"Z");
+    print " " . $timestamp;
+}
+
+print "\n";
 exit $rc;
 
 
@@ -138,6 +154,9 @@ sub print_usage() {
     print "[-e domain1,domain2,... -i domain1,domain2,...] exclude (-e) or include (-i)\n";
     print "\tdomains from/for alarming.\n";
     print "\t-e is not implemented.\n";
+    print "[-t] print timestamp.  Used when outputting to a file from cron to ensure it's unique.\n";
+    print "\tWe then do a checksum in Zabbix and if it doesn't change we know cron isn't running\n";
+    print "\tthe script.\n";
     
     print "\n";
 
