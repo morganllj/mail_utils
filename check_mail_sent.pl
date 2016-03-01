@@ -58,6 +58,7 @@ my $try_count = 0;
 while ($try_count<15) {
     # get the last line of the log to know the time at the end of the log file
     $last_line = `tail -1 $filename`;
+    chomp $last_line;
 
     print "last line: $last_line\n"
       if (exists $opts{d});
@@ -67,7 +68,7 @@ while ($try_count<15) {
         ($last_line =~ /([a-z]{3})\s+(\d{1,2})\s(\d{2}):(\d{2}):(\d{2})/i);
 
     if (!defined $mon || !defined $day || !defined $hour || !defined $min || !defined $sec) {
-        print "invalid last line, retrying...\n"
+        print "invalid last line, retrying...\n\n"
 	  if (exists $opts{d});
 	$try_count++;
 	sleep 3;
@@ -106,7 +107,7 @@ while (<IN>) {
 	    next unless ($line_time > ($end_time - ($time_period * 60)));
 
 	    if (!$printed_first && exists $opts{d}) {
-		print "first line: $_\n";
+		print "first line: $_\n\n";
 #		print "last line: $last_line\n";
 		$printed_first = 1;
 	    }
@@ -147,7 +148,12 @@ if (exists $opts{o}) {
 	my $contents = <$in>;
 	close ($in);
 	my @contents = split (/\s+/, $contents);
+
+	pop @contents
+	  if ($contents =~ /\d+Z\s*$/);
+
 	my $state = shift @contents;
+
 	%file_contents = @contents;
 
 	if (exists $opts{d}) {
@@ -206,12 +212,11 @@ if ($rc == 0) {
 } elsif ($rc == 3) {
     $live_state = "REPEAT";
 } else {
-    $live_state = "UNKNOWN\n";
+    $live_state = "UNKNOWN";
 }
 
 
 if (exists $opts{d}) {
-
     print "\n";
     print "live:\n";
     print "\tstate: $live_state\n";
@@ -222,21 +227,21 @@ if (exists $opts{d}) {
     print "\n";
 }
 
-if (exists $opts{d}) {
-    print $live_state, " ";
-    print join (' ', @status);
-    print "\n\n";
-}
+
 
 if (exists $opts{o}) {
-    print $out $live_state, " ";
-} else {
-    print $live_state, " ";
-}
+    if (exists $opts{d}) {
+	print $live_state;
+	print " " if ($#status>-1);
+	print join (' ', @status);
+    }
 
-if (exists $opts{o}) {
+    print $out $live_state;
+    print $out " " if ($#status>-1);
     print $out join (' ', @status);
 } else {
+    print $live_state;
+    print " " if ($#status>-1);
     print join (' ', @status);
 }
 
@@ -252,14 +257,19 @@ if (exists $opts{t}) {
     $mon = 0 . $mon if ($mon<10);
 
     my $timestamp = join '', ($year,$mon,$mday,$hour,$min,$sec,"Z");
-    print " " . $timestamp;
+
+
+
+    if (exists $opts{o}) {
+	if (exists $opts{d}) {
+	    print  " ", $timestamp, "\n\n";
+	}
+	print $out " ", $timestamp, "\n";
+    } else {
+	print " ", $timestamp, "\n";
+    }
 }
 
-if (exists $opts{o}) {
-    print $out "\n";
-} else {
-    print "\n";
-}
 exit $rc;
 
 
