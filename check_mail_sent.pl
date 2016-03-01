@@ -12,6 +12,9 @@
 # min period the plugin takes around 20 secs:
 # vi commands.cfg
 #    $USER1$/check_nrpe -H $HOSTADDRESS$ -c $ARG1$ -t 60
+#
+# */3 * * * * /etc/zabbix/custom/check_mail_sent.pl -p 60 -w 500 -c 2000 -f /var/mail_log/maillog -i domain.org -t > \
+#    /etc/zabbix/custom/check_mail_sent.log 2>&1
 
 use strict;
 use Getopt::Std;
@@ -22,7 +25,7 @@ sub get_concise_time($);
 
 
 my %opts;
-getopts('f:p:w:c:di:e:t', \%opts);
+getopts('f:p:w:c:di:e:to:', \%opts);
 
 my $filename = $opts{f} || print_usage();
 my $time_period = $opts{p} || print_usage(); # start parsing $time_period 
@@ -35,26 +38,50 @@ if (exists $opts{e}) {
     exit (1);
 }
 
-print "-d used, printing debugging..\n\n"
+print "-d used, printing debugging...\n\n"
   if (exists $opts{d});
 
 my @include_domains;
 if (exists $opts{i}) {
     @include_domains = split /\s*,\s*/, $opts{i};
-    print "only alerting for these domains: ", join " ", @include_domains, "\n"
+    print "only alerting for these domains: ", join " ", @include_domains, "\n\n"
       if ($opts{d});
 }
 
 my %mon2num = qw( Jan 0  Feb 1  Mar 2  Apr 3  May 4  Jun 5 Jul 6 Aug 7 Sep 8 
                   Oct 9 Nov 10 Dec 11 );
 
-# get the last line of the log to know the time at the end of the log file
-my $last_line = `tail -1 $filename`;
+my $last_line;
+my ($mon, $day, $hour, $min, $sec);
+my $try_count = 0;
 
-# format we're parsing: Mar 16 23:59:59
-my ($mon, $day, $hour, $min, $sec) = 
-    ($last_line =~ /([a-z]{3})\s+(\d{1,2})\s(\d{2}):(\d{2}):(\d{2})/i);
+while ($try_count<15) {
+    # get the last line of the log to know the time at the end of the log file
+    $last_line = `tail -1 $filename`;
+
+    print "last line: $last_line\n"
+      if (exists $opts{d});
+
+    # format we're parsing: Mar 16 23:59:59
+    ($mon, $day, $hour, $min, $sec) = 
+        ($last_line =~ /([a-z]{3})\s+(\d{1,2})\s(\d{2}):(\d{2}):(\d{2})/i);
+
+    if (!defined $mon || !defined $day || !defined $hour || !defined $min || !defined $sec) {
+        print "invalid last line, retrying...\n"
+	  if (exists $opts{d});
+	$try_count++;
+	sleep 3;
+    } else {
+	last;
+    }
+}
+
+if ($try_count > 9) {
+    die "problem finding last line in $opts{i}";
+}
+
 my $year = (localtime(time()))[5] + 1900;
+
 my $end_time = timelocal($sec, $min, $hour, $day, $mon2num{$mon}, $year);
 
 my $start_time;  # time we start parsing log entries: $end_time - ($time_period * 60)
@@ -73,14 +100,14 @@ while (<IN>) {
 	      /([a-z]{3})\s+(\d{1,2})\s(\d{2}):(\d{2}):(\d{2})/i;
             next
 #              if (!defined $l_day);
-	    if (!defined $l_mon || !defined $l_day || !defined $l_hour || !defined $l_min || !defined $l_sec);
+	      if (!defined $l_mon || !defined $l_day || !defined $l_hour || !defined $l_min || !defined $l_sec);
 	    my $line_time =
 	      timelocal($l_sec, $l_min, $l_hour, $l_day, $mon2num{$l_mon}, $year);
 	    next unless ($line_time > ($end_time - ($time_period * 60)));
 
 	    if (!$printed_first && exists $opts{d}) {
 		print "first line: $_\n";
-		print "last line: $last_line\n";
+#		print "last line: $last_line\n";
 		$printed_first = 1;
 	    }
 
@@ -101,25 +128,117 @@ my $rc=0;
 my @status;
 
 for my $addr (sort keys %addrs) {
-    push @status, $addr . " " . $addrs{$addr}
-      if ($addrs{$addr} >= $warn_level || $addrs{$addr} >= $critical_level);
+    if ($addrs{$addr} >= $warn_level || $addrs{$addr} >= $critical_level) {
+	#    push @status, $addr . " " . $addrs{$addr}
+	push @status, $addr;
+	push @status, $addrs{$addr};
+    }
+
     $rc = 1
       if (($addrs{$addr} >= $warn_level) && ($rc < 1) );
     $rc = 2
       if (($addrs{$addr} >= $critical_level) && ($rc < 2) );
 }
 
-if ($rc == 0) {
-    print "OK";
-} elsif ($rc == 1) {
-    print "WARNING ";
-} elsif ($rc == 2) {
-    print "CRITICAL ";
-} else {
-    print "UNKNOWN ";
+my %file_contents;
+if (exists $opts{o}) {
+    my $in;
+    unless (!open $in, $opts{o}) {
+	my $contents = <$in>;
+	close ($in);
+	my @contents = split (/\s+/, $contents);
+	my $state = shift @contents;
+	%file_contents = @contents;
+
+	if (exists $opts{d}) {
+	    print "file:\n";
+	    print "\tstate $state\n";
+	    for my $key (sort keys %file_contents) {
+		print "\t/$key/ /$file_contents{$key}/\n";
+	    }
+	}
+    }
 }
 
-print join (' ', @status);
+my %status = @status;
+
+# save the current rc
+my $saved_rc = $rc;
+# assume a rc of 3 (REPEAT) unless there are values in %file_contents
+# (the file is not empty) and there is a mismatch between their
+# contents
+$rc = 3;
+for my $key (sort keys %file_contents) {
+    if (!exists $status{$key}) {
+	  print "\n\t$key not in live_status\n"
+	    if (exists $opts{d});
+	  $rc = $saved_rc;
+	  last;  # one difference is enough to cause a non-3 rc
+      }
+}
+
+if (keys %file_contents > 0 && $rc == 3){
+    for my $key (sort keys %status) {
+	if (!exists $file_contents{$key}) {
+	    print "\n$key not in file\n"
+	      if (exists $opts{d});
+	    $rc = $saved_rc;
+	    last;	# one difference is enough to cause a non-3 rc
+	}
+    }
+} else { 
+    # if %file_contents is empty (the file is empty) then we never return 3 (REPEAT)
+    $rc = $saved_rc
+}
+
+my $out;
+if (exists $opts{o}) {
+    open ($out, ">", $opts{o}) || die "unable to open for writing: $opts{o}";
+}
+
+my $live_state;
+if ($rc == 0) {
+    $live_state = "OK";
+} elsif ($rc == 1) {
+    $live_state = "WARNING";
+} elsif ($rc == 2) {
+    $live_state = "CRITICAL";
+} elsif ($rc == 3) {
+    $live_state = "REPEAT";
+} else {
+    $live_state = "UNKNOWN\n";
+}
+
+
+if (exists $opts{d}) {
+
+    print "\n";
+    print "live:\n";
+    print "\tstate: $live_state\n";
+
+    for my $key (sort keys %status) {
+	print "\t/$key/ /$status{$key}/\n";
+    }
+    print "\n";
+}
+
+if (exists $opts{d}) {
+    print $live_state, " ";
+    print join (' ', @status);
+    print "\n\n";
+}
+
+if (exists $opts{o}) {
+    print $out $live_state, " ";
+} else {
+    print $live_state, " ";
+}
+
+if (exists $opts{o}) {
+    print $out join (' ', @status);
+} else {
+    print join (' ', @status);
+}
 
 if (exists $opts{t}) {
     my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) = gmtime (time);
@@ -136,7 +255,11 @@ if (exists $opts{t}) {
     print " " . $timestamp;
 }
 
-print "\n";
+if (exists $opts{o}) {
+    print $out "\n";
+} else {
+    print "\n";
+}
 exit $rc;
 
 
@@ -157,6 +280,8 @@ sub print_usage() {
     print "[-t] print timestamp.  Used when outputting to a file from cron to ensure it's unique.\n";
     print "\tWe then do a checksum in Zabbix and if it doesn't change we know cron isn't running\n";
     print "\tthe script.\n";
+    print "[-o] output to a file.  This also prints repeat in place of warning/critical if list list\n";
+    print "\toff addresses is the same as in the prior output file.\n";
     
     print "\n";
 
