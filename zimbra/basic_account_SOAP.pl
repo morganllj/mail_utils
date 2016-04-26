@@ -1,7 +1,7 @@
 #!/usr/bin/perl -w
 #
 
-use lib "/home/morgan/zcs-5.0.0_RC1_1538-src/ZimbraServer/src/perl/soap";
+use lib "/usr/local/zcs-6.0.7_GA_2483-src/ZimbraServer/src/perl/soap";
 
 use Time::HiRes qw ( time );
 use strict;
@@ -17,10 +17,10 @@ use Soap;
 my $ACCTNS = "urn:zimbraAdmin";
 my $MAILNS = "urn:zimbraAdmin";
 
-my $url = "https://dmail02.domain.org:7071/service/admin/soap/";
+my $url = "https://dmail01.domain.org:7071/service/admin/soap/";
 
 # username to look up
-my $name = "gab";
+my $name = "morgan";
 
 my $SOAP = $Soap::Soap12;
 
@@ -28,23 +28,24 @@ my $SOAP = $Soap::Soap12;
 # authenticate to the server
 my $d = new XmlDoc;
 $d->start('AuthRequest', $ACCTNS);
+#$d->start('AuthRequest');
 $d->add('name', undef, undef, "admin");
 $d->add('password', undef, undef, "pass");
 $d->end();
 
 # get an authResponse, authToken, sessionId & context back.
 my $authResponse = $SOAP->invoke($url, $d->root());
-#print "AuthResponse = ".$authResponse->to_string("pretty")."\n";
+print "AuthResponse = ".$authResponse->to_string("pretty")."\n";
 
 my $authToken = $authResponse->find_child('authToken')->content;
-# print "authToken($authToken)\n";
+print "authToken($authToken)\n";
 
 my $sessionId = $authResponse->find_child('sessionId')->content;
-# print "sessionId = $sessionId\n";
+print "sessionId = $sessionId\n";
 
 my $context = $SOAP->zimbraContext($authToken, $sessionId);
-# my $contextStr = $context->to_string("pretty");
-# print("Context = $contextStr\n");
+my $contextStr = $context->to_string("pretty");
+print("Context = $contextStr\n");
 
 
 
