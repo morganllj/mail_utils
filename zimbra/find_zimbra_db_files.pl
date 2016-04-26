@@ -1,5 +1,6 @@
 #!/usr/bin/perl -w
 #
+# https://wiki.zimbra.com/wiki/Account_mailbox_database_structure
 
 use strict;
 use Data::Dumper;
@@ -49,6 +50,9 @@ if (defined $account) {
       if (exists $opts{d});
 
     my $mboxgroup = $mailboxId % 100;
+
+    $mboxgroup=100
+      if ($mboxgroup == 0);
 
     print STDERR "mboxgroup: $mboxgroup\n"
       if (exists $opts{d});
