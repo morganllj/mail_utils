@@ -1,4 +1,4 @@
-#!/usr/bin/perl -w
+#!/opt/perl/bin/perl -w
 #
 
 use strict;
@@ -8,7 +8,7 @@ use XmlDoc;
 use Soap;
 use Net::LDAP;
 use Data::Dumper;
-use lib '/home/admin/ldap2zimbra';
+use lib '/export/jobroot/zimbra/ldap2zimbra';
 use ZimbraUtil;
 use Getopt::Std;
 
@@ -16,15 +16,16 @@ my %opts;
 
 sub printUsage();
 
-getopts('ndf:', \%opts);
+getopts('ndsf:', \%opts);
 
-print "f: $opts{f}\n";
+
 exists $opts{f} || printUsage();
+print "f: $opts{f}\n";
 
 print "-n used, no changes will be made\n"
   if (exists $opts{n});
-print "-d used, no dist lists will be deleted\n"
-  if (exists $opts{d});
+print "-s used, no dist lists will be deleted\n"
+  if (exists $opts{s});
 
 my $ldap_host = "ldaps://sgldap01.domain.net";
 my $ldap_bind_dn = "cn=directory manager";
@@ -54,7 +55,6 @@ $d3->start('GetAllDomainsRequest', $MAILNS);
 $d3->end;
 
 my $r = $zu->check_context_invoke($d3, \$context);
-# TODO: error checking!
 
 if ($r->name eq "Fault") {
     my $rsn = $zu->get_fault_reason($r);
@@ -82,35 +82,38 @@ $d4->start('GetAllDistributionListsRequest', $MAILNS); {
 my $r4 = $zu->check_context_invoke($d4, \$context);
 
 for my $child (@{$r4->children()}) {
-    my $dist_list =  (values %{$child->attrs()})[0];
+#    my $dist_list =  (values %{$child->attrs()})[0];
+    my $dist_list =  ${$child->attrs()}{name};
 
-    $in_zimbra{$dist_list} = 1
-      if ($dist_list =~ /^\d+\@$domain/i);
+    if ($dist_list =~ /^\d+\@$domain/i) {
+	$in_zimbra{$dist_list} = 1;
+    }
 }
 
+my $in_zimbra_count = keys %in_zimbra;
+print "number of records in zimbra: $in_zimbra_count\n";
 
  print "\nsearching ldap...\n";
  my $ldap = Net::LDAP->new("$ldap_host") or die "$@";
  $ldap->bind(dn=>$ldap_bind_dn, password=>$ldap_bind_pw);
 
- # my $sr = $ldap->search(base => "dc=domain,dc=org", filter => "(&(objectclass=orgStudent)(mail=*))", 
- # 		      attrs => "uid");
-# my $sr = $ldap->search(base => "dc=domain,dc=org", filter => "(&(objectclass=orgStudent)(orghomeorgcd=2540)(mail=*))", 
-#		      attrs => "uid");
- my $sr = $ldap->search(base => $ldap_base, filter => $filter, 
-		      attrs => "uid");
+ my $sr = $ldap->search(base => $ldap_base, filter => $filter);
+
+$sr->code && die "problem with search $filter: " . $sr->error;
 
  my $s = $sr->as_struct();
-
 
 print "\nchecking forwards in zimbra...\n";
 my %in_ldap;
 for my $dn (keys %$s) {
      my $mail = $s->{$dn}->{mail}[0];
      my $addr = $s->{$dn}->{mail}[0];
-#     $addr =~ s/domain/dev.domain/;
      $in_ldap{$addr} = 1;
  }
+
+# in_ldap
+my $in_ldap_count = keys %in_ldap;
+print "number of records in ldap: $in_ldap_count\n";
 
 for my $addr (sort keys %in_ldap) {
     if (!exists $in_zimbra{$addr}) {
@@ -120,7 +123,6 @@ for my $addr (sort keys %in_ldap) {
 	    my $d1 = new XmlDoc;
 
 	    my $uid = (split /\@/, $addr)[0];
-#	    my $remote_addr = $uid . "\@gmail-zgate-domain.domain.org";
 	    my $remote_addr = $uid . "\@" . $forwarding_domain;
 
 	    $d1->start('CreateDistributionListRequest', $MAILNS);
@@ -137,8 +139,6 @@ for my $addr (sort keys %in_ldap) {
 
 		my $rsn = $zu->get_fault_reason($r);
 		print "Error adding $addr, skipping.  Reason: ", Dumper $r, "\n";
-	  
-		#print Dumper ($r);
 		next;
 	    }
 
@@ -172,7 +172,7 @@ for my $addr (sort keys %in_ldap) {
     
 }
 
-unless (exists ($opts{d})) {
+unless (exists ($opts{s})) {
     for my $addr (sort keys %in_zimbra) {
 	if (!exists $in_ldap{$addr}) {
 	    print "removing $addr\n";
@@ -215,13 +215,14 @@ unless (exists ($opts{d})) {
     }
 }
 
-print "\nfinished at ", `date`;
-
-
+#my $date = `date`;
+print "\nfinished at ", `date`, "\n";
 
 sub printUsage() {
     print "\nusage: $0 [-n][-d] -f <ldap filter>\n";
-    print "\t[-d] skip deletes\n";
+    print "\t[-n] print-only, no changes will be made\n";
+    print "\t[-s] skip deletes\n";
+    print "\t[-d] print debugging\n";
     print "\n";
     exit;
 }
