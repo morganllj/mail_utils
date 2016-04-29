@@ -74,7 +74,7 @@ if (defined $account) {
     }
 
 
-    print STDERR "\nselecting messages from mboxgroup${mboxgroup}: select id,mailbox_id,volume_id,mod_content,subject from mail_item where mailbox_id=$mailboxId and type!=1;\n"
+    print STDERR "\nselecting messages from mboxgroup${mboxgroup}: select id,mailbox_id,    volume_id,mod_content,subject from mail_item where mailbox_id=$mailboxId and type!=1;\n"
       if (exists $opts{d});
 
     for (split /\n/,
