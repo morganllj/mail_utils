@@ -7,6 +7,7 @@ use Data::Dumper;
 
 sub move_and_purge(@);
 sub print_usage();
+sub calc_size($);
 
 my @script_dir = split /\//, $0;
 my $script_dir;
@@ -18,11 +19,6 @@ $script_dir = '/' . $script_dir if ($0=~/^\//);
 
 my %opts;
 getopts('oec:a:d:nu', \%opts);
-
-# if (!exists $opts{d} || (!exists $opts{c} && !exists $opts{a})) {
-#     print "you must specify either -c or -a and -d\n";
-#     print_usage();
-# }
 
 my $whoami = `whoami`;
 chomp $whoami;
@@ -49,7 +45,7 @@ print "-o specified, only odd records will be moved\n"
 
 if (exists $opts{c} && ! exists $opts{a}) {
     $count = $opts{c};
-    print "working on $count records...\n";
+    print "\nworking on $count records...\n";
 } 
 
 if (exists $opts{e} && exists $opts{o}) {
@@ -59,8 +55,6 @@ if (exists $opts{e} && exists $opts{o}) {
     print "-e | -o and -a are mutually exclusive\n";
     print_usage();
 }
-
-#my $dest = $opts{d};
 
 my $account_to_move;
 if (exists $opts{a}) {
@@ -85,8 +79,6 @@ while (<$in>) {
     my $length = () = split //, $n, -1;
     my $d = (split //, $n)[$length-2];
 
-
-
     if (($d !~ /^\d+$/) && (exists $opts{o} or exists $opts{e})) {
 	print "-e or -o specified and $account does not end in a number, it will be skipped.\n";
 	next;
@@ -102,7 +94,7 @@ while (<$in>) {
 	}
 
     if ($move_user) {
-	print "\n", $account, " $size\n";
+	print "\n", $account, " ", calc_size($size), "gb\n";
 	
 	my $rc = move_and_purge($account, $count);
 	
@@ -125,6 +117,14 @@ sub move_and_purge(@) {
 	my $last_digit = `zmprov ga $account zimbraarchiveaccount`;
 	$last_digit =~ /zimbraArchiveAccount: \d+(\d{1})/;
 	$last_digit = $1;
+
+	if (!defined $last_digit || $last_digit =~ /^\s*$/) {
+	    print "no last digit found for ${account}'s archive account, skipping\n";
+	    print "use -d <dest host> if you are moving account(s) that don't have an associated archive acct.\n";
+	    print "\n";
+	    return();
+	}
+	
 	if ($last_digit == "0" || $last_digit == "1") {
 	    $dest = "mail01.domain.org";
 	} elsif ($last_digit == "2" || $last_digit == "3") {
@@ -139,29 +139,32 @@ sub move_and_purge(@) {
 	print "destination host: $dest\n";
     }
 
-    if (! -f $script_dir . "/find_zimbra_db_files.pl") {
-	print "can't find find_zimbra_db_files.pl in $script_dir, please make sure it's in the same directory as $0\n";
-	exit;
-    }
+    # Zimbra 8.x changed the backend file format so this no longer works
+#    if (! -f $script_dir . "/find_zimbra_db_files.pl") {
+#	print "can't find find_zimbra_db_files.pl in $script_dir, please make sure it's in the same directory as $0\n";
+#	exit;
+#    }
 
-    my $output_file = "/var/tmp/${account}_files.csv";
+#    my $output_file = "/var/tmp/${account}_files.csv";
 
     print "($count account(s) left) " if (defined $count);
-    print "dumping file list for ${account}, " . `date`;
-    if (!exists $opts{n}) {
-	die "dumping db file list for $account failed."
-	  if (system ($script_dir . "/find_zimbra_db_files.pl -a $account > $output_file") != 0)
-    }
+    
+    # print "dumping file list for ${account}, " . `date`;
+    # if (!exists $opts{n}) {
+    # 	die "dumping db file list for $account failed."
+    # 	  if (system ($script_dir . "/find_zimbra_db_files.pl -a $account > $output_file") != 0)
+    # }
 
 
-    if (!exists $opts{n}) {
-	if (-z $output_file || ! -e $output_file) {
-	    print "$output_file is empty or missing, not moving/purging ${account}\n";
-	    return 1;
-	}
-    }
+    # if (!exists $opts{n}) {
+    # 	if (-z $output_file || ! -e $output_file) {
+    # 	    print "$output_file is empty or missing, not moving/purging ${account}\n";
+    # 	    return 1;
+    # 	}
+    # }
 
-    print "dumped ${account}'s file list, now moving " . `date`;
+#    print "dumped ${account}'s file list, now moving " . `date`;
+    print "moving files for ${account} at " . `date`;
     if (!exists $opts{n}) {
 	if (system ("zmmboxmove -a $account --from `zmhostname` --to $dest --sync") != 0) {
 	    die "zmmboxmove failed for $account";
@@ -175,35 +178,38 @@ sub move_and_purge(@) {
 	}
     }
 
-    print "checking that files were purged " . `date`;
+    # print "checking that files were purged " . `date`;
 
-    if (!exists $opts{n}) {
-	my $file_check_in;
-	open ($file_check_in, $output_file) || die "unable to open $output_file for reading";
-	my $files_exist  = 0;
-	while (<$file_check_in>) {
-	    my $file = (split /,/)[0];
-	    next if ( $file eq "NULL");
-	    if ( -f $file ) {
-		print "\texists: $file\n";
-		$files_exist = 1;
-	    }
-	}
-	die "not all files were purged for $account, exiting" if ($files_exist);
-    }
+    # if (!exists $opts{n}) {
+    # 	my $file_check_in;
+    # 	open ($file_check_in, $output_file) || die "unable to open $output_file for reading";
+    # 	my $files_exist  = 0;
+    # 	while (<$file_check_in>) {
+    # 	    my $file = (split /,/)[0];
+    # 	    next if ( $file eq "NULL");
+    # 	    if ( -f $file ) {
+    # 		print "\texists: $file\n";
+    # 		$files_exist = 1;
+    # 	    }
+    # 	}
+    # 	die "not all files were purged for $account, exiting" if ($files_exist);
+    # }
     
 }
 
-print "\ntotal_size: $total_size\n";
+#print "\ntotal size: $total_size\n";
+print "\ntotal size: ", calc_size($total_size), "gb\n";
 
 
 sub print_usage() {
     print "\n";
     print "usage: $0 -d <destination host> | -p \n";
-    print "\t-c <records to move> | -a <specific account to move> [ -o | -e ] [ -u ] [ -n ]\n";
+    print "\t-c <records to move> | -a <specific account to move>\n";
+    print "\t[ -o | -e ] [ -u ] [ -n ]\n";
     print "\n";
     print "\t-d <destination host> host to which to move account(s)\n";
-    print "\t-p pick host to which to move accounts based on last digit of archive account\n";
+    print "\t-p pick host to which to move accounts based on \n";
+    print "\tlast digit of archive account:\n";
     print "\t\t01: mail01, 2-3: mail02, 4-5: mail03, etc\n";
     print "\t-c <record count to move | -a <account to move>\n";
     print "\t\teither move an individual account or take a specified\n";
@@ -211,4 +217,12 @@ sub print_usage() {
     print "\t-o | -e only move records ending in odd or even numbers\n";
     print "\t-n print but do not make changes\n";
     exit 1;
+}
+
+
+sub calc_size($) {
+    my $size = shift;
+
+    my $r = sprintf("%.2f",  $size/(1024**3));
+    return $r;
 }
