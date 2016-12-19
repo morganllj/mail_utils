@@ -37,19 +37,25 @@ sub reindex {
 	print "\nreindexing $a at ", `date`;
 
 	my $cmd = "zmprov rim $a start 2>&1";
-	print "${i}) ${cmd}\n";
+	print "${a}) ${cmd}\n";
 
 	if (!defined $opts{n}) {
 	    my $out = `$cmd`;
 	    chomp $out;
 
-	    print "$out\n";
-	    while ($out =~ /Unable to submit reindex request. Try again later/) {
+	    print "${a}) $out\n";
+
+	    my $statuscmd = "zmprov rim $a status 2>&1";
+	    $out = `$statuscmd`;
+
+	    while ($out !~ /status: idle/) {
 		sleep 5;
-		print "${i}) ${cmd}\n";
-		$out = `$cmd`;
+		
+		$out = `$statuscmd`;
+		#		print "${a}) ${statuscmd}\n";
 		chomp $out;
-		print "$out\n";
+		$out =~ s/status: running\n//;
+		print "${a}) $out\n";
 	    }
 
 	}
