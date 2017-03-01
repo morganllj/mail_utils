@@ -9,16 +9,20 @@ my %opts;
 sub print_usage;
 sub reindex;
 
-getopts('nau:', \%opts);
+getopts('nau:s:', \%opts);
 
 print_usage()
-  unless (exists $opts{a} || exists $opts{u});
+  unless (exists $opts{a} || exists $opts{u} || exists $opts{s});
 
 print "starting at ", `date`, "\n";
 
 my @accts;
 
-if (exists $opts{u}) {
+if (exists $opts{s}) {
+    #    @accts = `zmprov -l gaa`;
+    print "only indexing accounts on host $opts{s}\n";
+    @accts = `zmprov -l sa '(&(zimbramailhost=$opts{s})(objectclass=zimbraAccount))'`;
+} elsif (exists $opts{u}) {
     @accts = split /\s*,\s*/, $opts{u};
 } else {
     @accts = `zmprov -l gaa`;
@@ -34,6 +38,8 @@ sub reindex {
       
     my $i = 1;
     for my $a (sort @accts) {
+	chomp $a;
+	
 	print "\nreindexing $a at ", `date`;
 
 	my $cmd = "zmprov rim $a start 2>&1";
