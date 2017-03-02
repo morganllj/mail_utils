@@ -18,7 +18,6 @@ $| = 1;
 
 for my $user (`zmprov -l gaa |grep -v archive`) {
   chomp $user;
-  print $user, "\n";
 
     my $print_user = 1;
     
