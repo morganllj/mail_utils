@@ -20,6 +20,6 @@ for l in out.split("\n"):
             mysql_user = v
         elif k == "zimbra_mysql_password":
             mysql_pass = v
-        
 
 print mysql_user, mysql_pass
+
