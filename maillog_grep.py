@@ -21,20 +21,19 @@ for opt, arg in opts:
 if file is None:
     print_usage()
 
-print ("file: "+file)
+r_obj = re.compile(r'mta\d\d postfix[^:]+: ([^:]+): (from|to)=<([^>]+)>')
 
-f = open(file, "r")
+q_ids = {}
 
-if f.mode != 'r':
-    print ("unable to open "+file+".  Exiting")
-
-r_obj = re.compile(r'mta\d\d postfix\/smtp')
-
-for line in f.readlines():
-    print ("top of for")
+for line in open(file):
     line = line.rstrip()
     mo = re.search(r_obj, line)
     if mo:
-        print ("matched: /"+line+"/")
+#        print ("matched: /"+line+"/")
+#        print (mo.group(1) + " " + mo.group(2) + " " + mo.group(3))
+        if mo.group(1) not in q_ids.keys():
+            q_ids[mo.group(1)] = {}
+        q_ids[mo.group(1)][mo.group(2)] = mo.group(3)
 
-f.close()
+
+print (q_ids)
