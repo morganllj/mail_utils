@@ -5,35 +5,133 @@ import sys
 import getopt
 import re
 
-file=None
+fm=to=file=None
 
 
 def print_usage():
-    print ("usage: "+sys.argv[0]+" -f <filename>")
+    print ("usage: "+sys.argv[0]+" (-f <from>|-t <to>) -m <maillog>")
     exit()
 
-opts, args = getopt.getopt(sys.argv[1:], "f:")
+
+def add_to_qids_to_print(q):
+    qid = q
+
+    matched = 0
+    for v in qids_to_print:
+        if v == qid:
+            matched = 1
+    if not matched:
+        qids_to_print.append(qid)
+
+
+def check_qids(q,a,r,ft,l):
+    qid  = q
+    in_addr = a
+    r_obj = r
+    in_fmto = ft
+    in_line = l
+
+    if in_addr is not None:
+        # the user passed both from and to: look for the complementing from/to and print it if so
+        if qid in qids.keys():
+            matched = 0
+            for v in qids[qid]:
+                 mo = re.search(r_obj, in_line)
+                 qid = mo.group(1)
+                 fmto = mo.group(2)
+                 addr = mo.group(3)
+                 if addr.lower() == in_addr.lower() and fmto.lower() == in_fmto.lower():
+                     matched = 1
+            if matched:
+                # cycle through, print, and delete from qids
+                for v in qids[qid]:
+                    print (v)
+                    del qids[qid]
+                # and print the current line
+                print (in_line)
+                # print all future occurrences of this qid
+                #qids_to_print.append(qid)
+                add_to_qids_to_print(qid)
+                # tell the caller we printed
+                return 1
+    else:
+        # the user only passed from or to, print everything we have for the qid so far
+        if qid in qids.keys():
+            for v in qids[qid]:
+                print (v)
+                del qids[k]
+        print ("check_qids, else: "+in_line)
+
+#        qids_to_print.append(qid)
+        add_to_qids_to_print(qid)
+        return 1
+    return 0
+
+opts, args = getopt.getopt(sys.argv[1:], "f:t:m:")
 
 for opt, arg in opts:
-    if opt in ('-f'):
+    if opt in ('-m'):
         file = arg
+    elif opt in ('-f'):
+        fm = arg
+    elif opt in ('-t'):
+        to = arg
+    else:
+        print_usage()
 
 if file is None:
     print_usage()
 
-r_obj = re.compile(r'mta\d\d postfix[^:]+: ([^:]+): (from|to)=<([^>]+)>')
+if fm is None and to is None:
+   print_usage()
+        
+print ("file: "+file)
+if to is not None:
+    print ("to: "+to)
+if fm is not None:
+    print ("from: "+fm)
 
-q_ids = {}
+r_obj = re.compile(r'mta\d\d postfix[^:]+: ([^:]+): (from|to)=<([^>]+)>')
+qids = {}
+qids_to_print = []
 
 for line in open(file):
     line = line.rstrip()
+
+    printed = 0
     mo = re.search(r_obj, line)
     if mo:
-#        print ("matched: /"+line+"/")
-#        print (mo.group(1) + " " + mo.group(2) + " " + mo.group(3))
-        if mo.group(1) not in q_ids.keys():
-            q_ids[mo.group(1)] = {}
-        q_ids[mo.group(1)][mo.group(2)] = mo.group(3)
+        qid = mo.group(1)
+        fmto = mo.group(2)
+        addr = mo.group(3)
 
+        print ("\n"+qid, fmto, addr)
 
-print (q_ids)
+        if fmto.lower() == "from" and fm is not None:
+            if addr.lower() == fm.lower():
+                printed = check_qids(qid, to, r_obj, "to", line)
+                
+        elif fmto.lower() == "to" and to is not None:
+            if addr.lower() == to.lower():
+                printed = check_qids(qid, fm, r_obj, "from", line)
+
+        if not printed:
+            if qid not in qids.keys():
+                qids[qid] = []
+            qids[qid].append(line)
+                    
+            for q in qids_to_print:
+                if qid == q:
+                    if qid in qids.keys():
+                        for l in qids[q]:
+                            print (l)
+                    print ("here"+line)
+                        
+
+        #     if not printed:
+        #         if qid not in qids.keys():
+        #             qids[qid] = []
+        #         print ("added to qids: "+line)
+        #         qids[qid].append(line)
+            
+        
