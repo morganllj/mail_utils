@@ -23,6 +23,16 @@ def add_to_qids_to_print(q):
     if not matched:
         qids_to_print.append(qid)
 
+def in_qids_to_print(q):
+    qid = q
+    
+    matched = 0
+    for v in qids_to_print:
+        if v == qid:
+            matched = 1
+    if matched:
+        return 1
+    return 0
 
 def check_qids(q,a,r,ft,l):
     qid  = q
@@ -91,6 +101,7 @@ if to is not None:
 if fm is not None:
     print ("from: "+fm)
 
+# this is too specific if I want all log lines, it will get just froms and tos which might be enough.
 r_obj = re.compile(r'mta\d\d postfix[^:]+: ([^:]+): (from|to)=<([^>]+)>')
 qids = {}
 qids_to_print = []
@@ -105,27 +116,62 @@ for line in open(file):
         fmto = mo.group(2)
         addr = mo.group(3)
 
-        print ("\n"+qid, fmto, addr)
+#        print ("\n"+qid, fmto, addr)
 
-        if fmto.lower() == "from" and fm is not None:
-            if addr.lower() == fm.lower():
-                printed = check_qids(qid, to, r_obj, "to", line)
+        if qid not in qids.keys():
+            qids[qid] = []
+        qids[qid].append(line)
+        
+        if ((fmto.lower() == "from" and fm is not None and fm.lower() == addr.lower()) or
+            (fmto.lower() == "to" and to is not None and to.lower() == addr.lower())):
+            if ((fmto.lower() == "from" and to is not None) or
+                (fmto.lower() == "to"   and fm is not None)):
+
+                # duplicated!
+#                if qid in qids.keys():
+                    if in_qids_to_print(qid):
+                        for l in qids[qid]:
+                            print ("here: "+l)
+                        del qids[qid]
+
+                else: # not in qids_to_print, decide if this one is both from and to the right addrs
+                    if qid in qids.keys()
+
                 
-        elif fmto.lower() == "to" and to is not None:
-            if addr.lower() == to.lower():
-                printed = check_qids(qid, fm, r_obj, "from", line)
+            else:
+                add_to_qids_to_print(qid)
+                for l in qids[qid]:
+                    print (l)
+                del qids[qid]
+        else:
+            # there's no match but if the qid is one we need to print, print it
+#            if qid in qids.keys():
+                if in_qids_to_print(qid):
+                    for l in qids[qid]:
+                        print (l)
+                    del qids[qid]
+                
+        
 
-        if not printed:
-            if qid not in qids.keys():
-                qids[qid] = []
-            qids[qid].append(line)
+        # if fmto.lower() == "from" and fm is not None:
+        #     if addr.lower() == fm.lower():
+        #         printed = check_qids(qid, to, r_obj, "to", line)
+                
+        # elif fmto.lower() == "to" and to is not None:
+        #     if addr.lower() == to.lower():
+        #         printed = check_qids(qid, fm, r_obj, "from", line)
+
+        # if not printed:
+        #     if qid not in qids.keys():
+        #         qids[qid] = []
+        #     qids[qid].append(line)
                     
-            for q in qids_to_print:
-                if qid == q:
-                    if qid in qids.keys():
-                        for l in qids[q]:
-                            print (l)
-                    print ("here"+line)
+        #     for q in qids_to_print:
+        #         if qid == q:
+        #             if qid in qids.keys():
+        #                 for l in qids[q]:
+        #                     print (l)
+        #             print ("here"+line)
                         
 
         #     if not printed:
