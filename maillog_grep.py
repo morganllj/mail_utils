@@ -127,17 +127,13 @@ for line in open(file):
             if ((fmto.lower() == "from" and to is not None) or
                 (fmto.lower() == "to"   and fm is not None)):
 
-                # duplicated!
-#                if qid in qids.keys():
-                    if in_qids_to_print(qid):
-                        for l in qids[qid]:
-                            print ("here: "+l)
-                        del qids[qid]
-
+                # duplicated from below!
+                if in_qids_to_print(qid):
+                    for l in qids[qid]:
+                        print ("here: "+l)
+                    del qids[qid]
                 else: # not in qids_to_print, decide if this one is both from and to the right addrs
                     if qid in qids.keys()
-
-                
             else:
                 add_to_qids_to_print(qid)
                 for l in qids[qid]:
@@ -145,39 +141,10 @@ for line in open(file):
                 del qids[qid]
         else:
             # there's no match but if the qid is one we need to print, print it
-#            if qid in qids.keys():
-                if in_qids_to_print(qid):
-                    for l in qids[qid]:
-                        print (l)
-                    del qids[qid]
+            if in_qids_to_print(qid):
+                for l in qids[qid]:
+                    print (l)
+                del qids[qid]
                 
         
 
-        # if fmto.lower() == "from" and fm is not None:
-        #     if addr.lower() == fm.lower():
-        #         printed = check_qids(qid, to, r_obj, "to", line)
-                
-        # elif fmto.lower() == "to" and to is not None:
-        #     if addr.lower() == to.lower():
-        #         printed = check_qids(qid, fm, r_obj, "from", line)
-
-        # if not printed:
-        #     if qid not in qids.keys():
-        #         qids[qid] = []
-        #     qids[qid].append(line)
-                    
-        #     for q in qids_to_print:
-        #         if qid == q:
-        #             if qid in qids.keys():
-        #                 for l in qids[q]:
-        #                     print (l)
-        #             print ("here"+line)
-                        
-
-        #     if not printed:
-        #         if qid not in qids.keys():
-        #             qids[qid] = []
-        #         print ("added to qids: "+line)
-        #         qids[qid].append(line)
-            
-        
