@@ -56,6 +56,7 @@ if fm is None and to is None:
 # this is too specific if I want all log lines, it will get just froms and tos which might be enough.
 r_obj = re.compile(r'mta\d\d postfix[^:]+: ([^:]+): (from|to)=<([^>]+)>')
 qids = {}
+persist = {}
 qids_to_print = []
 
 for line in open(file):
@@ -71,7 +72,17 @@ for line in open(file):
         # all lines go in qids, qid as index
         if qid not in qids.keys():
             qids[qid] = []
-        qids[qid].append(line)
+        if qid not in persist.keys():
+            persist[qid] = []
+        found = 0
+
+        for l in persist[qid]:
+            if l == line:
+                found = 1
+        if not found:
+            qids[qid].append(line)
+            persist[qid].append(line)
+
         
         if ((fmto.lower() == "from" and fm is not None and fm.lower() == addr.lower()) or
             (fmto.lower() == "to" and to is not None and to.lower() == addr.lower())):
