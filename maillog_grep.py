@@ -119,6 +119,7 @@ for line in open(file):
 
         if qid not in qids.keys():
             qids[qid] = []
+        print ("a:",qid, line)
         qids[qid].append(line)
         
         if ((fmto.lower() == "from" and fm is not None and fm.lower() == addr.lower()) or
@@ -139,6 +140,7 @@ for line in open(file):
                             fmto2 = mo2.group(2)
                             addr2 = mo2.group(3)
                             if fmto.lower() == "from" and fmto2.lower() == "to":
+                                print ("comparing", to.lower(), addr2.lower())
                                 if to.lower() == addr2.lower():
                                     matched = 1
                             elif fmto.lower() == "to" and fmto2.lower() == "from":
@@ -146,6 +148,7 @@ for line in open(file):
                                     matched = 1
                     if matched:
                         # duplicate!
+                        add_to_qids_to_print(qid)
                         for l in qids[qid]:
                             print (l)
                         del qids[qid]
