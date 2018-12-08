@@ -134,13 +134,16 @@ for line in open(file):
                 else: # not in qids_to_print, decide if this one is both from and to the right addrs
                     matched = 0
                     for l in qids[qid]:
-                        mo2 = re.search(r_obj, line)
+                        mo2 = re.search(r_obj, l)
                         if mo2:
                             fmto2 = mo2.group(2)
                             addr2 = mo2.group(3)
-                            if ((fmto.lower() == "from" and fmto2.lower() == "to") or 
-                                (fmto.lower() == "to" and fmto2.lower() == "from")):
-                                matched = 1
+                            if fmto.lower() == "from" and fmto2.lower() == "to":
+                                if to.lower() == addr2.lower():
+                                    matched = 1
+                            elif fmto.lower() == "to" and fmto2.lower() == "from":
+                                if to.lower() == addr2.lower():
+                                    matched = 1
                     if matched:
                         # duplicate!
                         for l in qids[qid]:
