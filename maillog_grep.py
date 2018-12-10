@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
 #
+# search a postfix maillog file for messages from, to, or from and to certain addresses
+#
+# only searches for exact strings
+# only prints from/to lines
+# only searched from/to single addresses
+# search from stdin or a user specified file
+#
+# for i in `ls  -1trah maillog-20180[123456]*`; do echo $i; zcat $i| \
+#   /home1/morgan/maillog_grep.py -f addr1@tld -t addr2@tld; done 2>&1 | \
+#   tee /var/tmp/181120_xyz_search.out
 
 import sys
 import getopt
@@ -10,6 +20,7 @@ fm=to=file=None
 
 def print_usage():
     print ("usage: "+sys.argv[0]+" (-f <from>|-t <to>) -m <maillog>")
+    print ("   or: cat <maillog> | "+sys.argv[0]+" (-f <from>|-t <to>)")
     exit()
 
 def add_to_qids_to_print(q):
@@ -33,33 +44,8 @@ def in_qids_to_print(q):
         return 1
     return 0
 
-
-####### main
-opts, args = getopt.getopt(sys.argv[1:], "f:t:m:")
-
-for opt, arg in opts:
-    if opt in ('-m'):
-        file = arg
-    elif opt in ('-f'):
-        fm = arg
-    elif opt in ('-t'):
-        to = arg
-    else:
-        print_usage()
-
-if file is None:
-    print_usage()
-
-if fm is None and to is None:
-   print_usage()
-
-# this is too specific if I want all log lines, it will get just froms and tos which might be enough.
-r_obj = re.compile(r'mta\d\d postfix[^:]+: ([^:]+): (from|to)=<([^>]+)>')
-qids = {}
-persist = {}
-qids_to_print = []
-
-for line in open(file):
+def process(l):
+    line = l
     line = line.rstrip()
 
     printed = 0
@@ -82,7 +68,6 @@ for line in open(file):
         if not found:
             qids[qid].append(line)
             persist[qid].append(line)
-
         
         if ((fmto.lower() == "from" and fm is not None and fm.lower() == addr.lower()) or
             (fmto.lower() == "to" and to is not None and to.lower() == addr.lower())):
@@ -110,6 +95,34 @@ for line in open(file):
             for l in qids[qid]:
                 print (l)
             del qids[qid]
-                
-        
 
+
+####### main
+opts, args = getopt.getopt(sys.argv[1:], "f:t:m:h")
+
+for opt, arg in opts:
+    if opt in ('-m'):
+        file = arg
+    elif opt in ('-f'):
+        fm = arg
+    elif opt in ('-t'):
+        to = arg
+    else:
+        print_usage()
+
+if fm is None and to is None:
+   print_usage()
+
+# this is too specific if I want all log lines, it will get just froms and tos which might be enough.
+r_obj = re.compile(r'mta\d\d postfix[^:]+: ([^:]+): (from|to)=<([^>]+)>')
+qids = {}
+persist = {}
+qids_to_print = []
+
+if file is None:
+    for line in sys.stdin:
+        process (line)
+else:
+    for line in open(file):
+        process (line)
+    
