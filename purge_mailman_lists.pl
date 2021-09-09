@@ -9,9 +9,9 @@ getopt ('n', \%opts);
 print "-n used, no changes will be made\n\n"
   if (exists $opts{n});
 
-my $archive_path = qw:/var/lib/mailman/archives:;
-my $mbox_purge = qw:/usr/local/bin/mbox-purge:;
-my $arch = qw:/usr/lib/mailman/bin/arch:;
+my $archive_path = qw:/usr/local/mailman/archives:;
+my $mbox_purge = qw:/usr/local/sbin/mbox-purge.pl:;
+my $arch = qw:/usr/local/mailman/bin/arch:;
 print "archive_path: $archive_path\n";
 
 my $t = time();
